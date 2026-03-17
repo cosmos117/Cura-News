@@ -1,0 +1,9 @@
+/**
+ * Services Directory
+ * 
+ * This folder will contain external API integrations and business logic:
+ * - newsService.js (fetch from The Hindu, Indian Express, Times of India)
+ * - aiService.js (OpenAI API for summarization & quiz)
+ * - jwtService.js (JWT token generation and validation)
+ * - emailService.js (email notifications)
+ */

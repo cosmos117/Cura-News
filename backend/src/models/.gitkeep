@@ -1,0 +1,9 @@
+/**
+ * Models Directory
+ * 
+ * This folder will contain Mongoose schemas for:
+ * - User.js (user authentication and profile)
+ * - News.js (news articles with AI summaries)
+ * - Quiz.js (quiz questions per article)
+ * - Notes.js (user notes per article)
+ */

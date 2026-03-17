@@ -1,0 +1,10 @@
+/**
+ * Controllers Directory
+ * 
+ * This folder will contain business logic modules for:
+ * - authController.js (signup, login, logout)
+ * - newsController.js (fetch, filter, display news)
+ * - quizController.js (quiz operations)
+ * - notesController.js (user notes management)
+ * - aiController.js (AI summarization operations)
+ */

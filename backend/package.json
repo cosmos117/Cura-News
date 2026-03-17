@@ -1,0 +1,34 @@
+{
+  "name": "cura-news-backend",
+  "version": "1.0.0",
+  "description": "AI Current Affairs News Summarizer Backend",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "news",
+    "ai",
+    "summarizer",
+    "upsc",
+    "cds"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.0",
+    "dotenv": "^16.0.0",
+    "mongoose": "^7.0.0",
+    "cors": "^2.8.5",
+    "morgan": "^1.10.0",
+    "jsonwebtoken": "^9.0.0",
+    "bcryptjs": "^2.4.3",
+    "axios": "^1.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
