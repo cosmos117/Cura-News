@@ -1,0 +1,9 @@
+/**
+ * Utilities Directory
+ * 
+ * This folder will contain helper functions:
+ * - validators.js (input validation logic)
+ * - constants.js (app-wide constants)
+ * - logger.js (custom logging)
+ * - helpers.js (common helper functions)
+ */
