@@ -1,4 +1,5 @@
 import Note from "../models/Note.js";
+import mongoose from "mongoose";
 import { AppError, asyncHandler } from "../middleware/errorHandler.js";
 
 /**
@@ -19,7 +20,7 @@ export const createNote = asyncHandler(async (req, res, next) => {
     throw new AppError("Please provide note content", 400);
   }
 
-  if (Content.length < 10) {
+  if (content.length < 10) {
     throw new AppError("Note content must be at least 10 characters", 400);
   }
 
@@ -180,7 +181,7 @@ export const updateNote = asyncHandler(async (req, res, next) => {
 
   // Update tags if provided
   if (tags !== undefined) {
-    if (array.isArray(tags) && tags.length > 5) {
+    if (Array.isArray(tags) && tags.length > 5) {
       throw new AppError("Cannot have more than 5 tags", 400);
     }
     note.tags = tags;
@@ -276,7 +277,7 @@ export const getNoteStats = asyncHandler(async (req, res, next) => {
   const pinnedNotes = await Note.countDocuments({ userId, isPinned: true });
 
   const tagStats = await Note.aggregate([
-    { $match: { userId: mongoose.Types.ObjectId(userId) } },
+    { $match: { userId: new mongoose.Types.ObjectId(userId) } },
     { $unwind: "$tags" },
     {
       $group: {

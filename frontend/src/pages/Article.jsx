@@ -50,14 +50,7 @@ export default function Article() {
     try {
       const response = await newsAPI.getById(id);
       setArticle(response.data.data);
-
-      // Fetch summary if available
-      try {
-        const summaryResponse = await newsAPI.getSummary(id);
-        setSummary(summaryResponse.data.data.summary);
-      } catch (err) {
-        console.log("Summary not available");
-      }
+      setSummary(response.data.data?.summary || null);
 
       // Fetch quiz if authenticated
       if (isAuthenticated) {
