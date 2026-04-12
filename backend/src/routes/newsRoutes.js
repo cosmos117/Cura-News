@@ -72,44 +72,6 @@ router.get("/today", getTodayNews);
 router.get("/", getTodayNews);
 
 /**
- * GET /api/news/:id
- * Fetch a single news article by ID
- *
- * Parameters:
- * - id: MongoDB ObjectId of the article
- *
- * Query Parameters:
- * - includeAnswers: "true" to include quiz answers (for admin/teacher)
- *
- * Example:
- * GET /api/news/507f1f77bcf86cd799439011
- * GET /api/news/507f1f77bcf86cd799439011?includeAnswers=true
- *
- * Response (Public):
- * {
- *   "success": true,
- *   "message": "News article retrieved successfully",
- *   "data": {
- *     "_id": "...",
- *     "source": "The Hindu",
- *     "headline": "...",
- *     "summary": "...",
- *     "bulletPoints": [...],
- *     "tags": [...],
- *     "subtopics": [...],
- *     "quiz": [
- *       {
- *         "question": "...",
- *         "options": [...],
- *         "answer": "A"  // Only if includeAnswers=true
- *       }
- *     ]
- *   }
- * }
- */
-router.get("/:id", getNewsByID);
-
-/**
  * POST /api/news
  * Create a new news article (with AI-processed data)
  *
@@ -269,5 +231,43 @@ router.get("/stats/overview", getNewsStats);
  *   6. Log results
  */
 router.get("/fetch-daily", fetchDailyNews);
+
+/**
+ * GET /api/news/:id
+ * Fetch a single news article by ID
+ *
+ * Parameters:
+ * - id: MongoDB ObjectId of the article
+ *
+ * Query Parameters:
+ * - includeAnswers: "true" to include quiz answers (for admin/teacher)
+ *
+ * Example:
+ * GET /api/news/507f1f77bcf86cd799439011
+ * GET /api/news/507f1f77bcf86cd799439011?includeAnswers=true
+ *
+ * Response (Public):
+ * {
+ *   "success": true,
+ *   "message": "News article retrieved successfully",
+ *   "data": {
+ *     "_id": "...",
+ *     "source": "The Hindu",
+ *     "headline": "...",
+ *     "summary": "...",
+ *     "bulletPoints": [...],
+ *     "tags": [...],
+ *     "subtopics": [...],
+ *     "quiz": [
+ *       {
+ *         "question": "...",
+ *         "options": [...],
+ *         "answer": "A"  // Only if includeAnswers=true
+ *       }
+ *     ]
+ *   }
+ * }
+ */
+router.get("/:id", getNewsByID);
 
 export default router;

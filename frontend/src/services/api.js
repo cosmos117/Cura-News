@@ -12,19 +12,14 @@ export const authAPI = {
 export const newsAPI = {
   getAll: (params) => apiClient.get("/news", { params }),
   getById: (id) => apiClient.get(`/news/${id}`),
-  getSummary: (id) => apiClient.get(`/news/${id}/summary`),
   create: (data) => apiClient.post("/news", data),
-  update: (id, data) => apiClient.put(`/news/${id}`, data),
-  delete: (id) => apiClient.delete(`/news/${id}`),
 };
 
 // AI API calls
 export const aiAPI = {
   summarize: (data) => apiClient.post("/ai/summarize", data),
-  generateSummary: (articleId) =>
-    apiClient.post("/ai/generate-summary", { articleId }),
-  batchSummarize: (articleIds) =>
-    apiClient.post("/ai/batch-summarize", { articleIds }),
+  batchSummarize: (articles) =>
+    apiClient.post("/ai/batch-summarize", { articles }),
 };
 
 // Notes API calls
@@ -41,5 +36,5 @@ export const notesAPI = {
 export const quizAPI = {
   getQuiz: (articleId) => apiClient.get(`/quiz/${articleId}`),
   submitQuiz: (data) => apiClient.post("/quiz/submit", data),
-  getResults: (articleId) => apiClient.get(`/quiz/${articleId}/results`),
+  getResults: (articleId) => apiClient.get(`/quiz/${articleId}/answers`),
 };
