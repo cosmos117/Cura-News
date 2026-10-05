@@ -1,6 +1,8 @@
 import express from "express";
 import morgan from "morgan";
+import { config } from "./config/env.js";
 import { corsMiddleware } from "./middleware/corsMiddleware.js";
+import { apiLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import testRoutes from "./routes/testRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
@@ -16,12 +18,17 @@ const app = express();
 // CORS - Handle cross-origin requests
 app.use(corsMiddleware());
 
-// Body Parser - Parse incoming JSON requests
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ limit: "10mb", extended: true }));
+// Body Parser - Parse incoming JSON requests.
+// 10MB is far more than any legitimate payload (the largest is a 10,000-char
+// article string) and was a cheap memory-pressure vector under load.
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ limit: "1mb", extended: true }));
 
 // Logging - HTTP request logging
-app.use(morgan(process.env.NODE_ENV === "development" ? "dev" : "combined"));
+app.use(morgan(config.isDevelopment ? "dev" : "combined"));
+
+// Rate limiting across the API surface
+app.use("/api", apiLimiter);
 
 // ====== HEALTH CHECK ======
 app.get("/health", (req, res) => {
@@ -58,7 +65,7 @@ app.get("/api/info", (req, res) => {
     name: "CURA News API",
     version: "1.0.0",
     description: "AI Current Affairs News Summarizer Backend",
-    environment: process.env.NODE_ENV || "development",
+    environment: config.NODE_ENV,
   });
 });
 

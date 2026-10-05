@@ -1,475 +1,508 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { newsAPI } from "../services/api";
+import SourceLogo from "../components/SourceLogo";
+import {
+  NEWS_CATEGORIES,
+  TOPIC_LABELS,
+  NEWS_SOURCES,
+  SEARCH_MIN_LENGTH,
+  getCategoryClass,
+  getTagClass,
+} from "../constants/news";
+import {
+  formatRelativeTime,
+  formatToday,
+  getErrorMessage,
+} from "../utils/format";
 import {
   Newspaper,
   LogOut,
   Search,
-  Filter,
   Loader,
   RefreshCw,
   AlertCircle,
-  TrendingUp,
   Calendar,
-  Tag,
   ChevronRight,
+  ExternalLink,
+  LayoutGrid,
+  LayoutList,
+  Landmark,
+  Briefcase,
+  Trophy,
+  Cpu,
+  Globe2,
+  Clapperboard,
+  Shapes,
+  SlidersHorizontal,
+  Check,
+  X,
 } from "lucide-react";
 
-const CATEGORIES = [
-  { value: "all", label: "All News" },
-  { value: "technology", label: "Technology" },
-  { value: "business", label: "Business" },
-  { value: "science", label: "Science" },
-  { value: "health", label: "Health" },
-  { value: "entertainment", label: "Entertainment" },
-  { value: "sports", label: "Sports" },
-];
+const SEARCH_DEBOUNCE_MS = 300;
+
+/** Icon per category, for the topic cards. */
+const CATEGORY_ICONS = {
+  "Politics & Governance": Landmark,
+  "Economy & Business": Briefcase,
+  Sports: Trophy,
+  "Science & Technology": Cpu,
+  "World Affairs": Globe2,
+  Entertainment: Clapperboard,
+  Other: Shapes,
+};
+
+const emptyFacets = {
+  byCategory: Object.fromEntries(NEWS_CATEGORIES.map((c) => [c, 0])),
+  bySource: Object.fromEntries(NEWS_SOURCES.map((s) => [s, 0])),
+};
 
 export default function Dashboard() {
   const { user, logout, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [articles, setArticles] = useState([]);
+  const [facets, setFacets] = useState(emptyFacets);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
-  const [selectedTags, setSelectedTags] = useState([]); // Multiple tags filter
+  const [selectedCategories, setSelectedCategories] = useState([]);
+  const [selectedSources, setSelectedSources] = useState([]);
   const [error, setError] = useState(null);
-  const [viewMode, setViewMode] = useState("grouped"); // "grid" or "grouped"
+  const [viewMode, setViewMode] = useState("grouped");
+  const debounceRef = useRef(null);
 
+  // Debounce the search box so typing does not fire a request per keystroke.
   useEffect(() => {
-    if (!isAuthenticated) {
-      navigate("/login");
-      return;
-    }
-    fetchArticles();
-  }, [isAuthenticated, navigate, selectedTags]);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const term = searchInput.trim();
+      // The backend rejects terms under SEARCH_MIN_LENGTH, so don't send them.
+      setSearchTerm(term.length >= SEARCH_MIN_LENGTH ? term : "");
+    }, SEARCH_DEBOUNCE_MS);
 
-  const fetchArticles = async () => {
+    return () => clearTimeout(debounceRef.current);
+  }, [searchInput]);
+
+  /**
+   * All filters are applied server-side in one request, which is what makes
+   * search + category + source + tags combine as an AND. Filtering a
+   * client-side page instead silently ignores matches beyond the page limit.
+   */
+const fetchArticles = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const params = {
-        limit: 50,
-        offset: 0,
-      };
-
-      // Add tags parameter if tags are selected
-      if (selectedTags.length > 0) {
-        params.tags = selectedTags.join(",");
-      }
+      const params = { limit: 50, skip: 0 };
+      if (searchTerm) params.search = searchTerm;
+      if (selectedCategories.length) params.category = selectedCategories.join(",");
+      if (selectedSources.length) params.source = selectedSources.join(",");
 
       const response = await newsAPI.getAll(params);
       setArticles(response.data.data || []);
+      setTotal(response.data.pagination?.total ?? 0);
+      setFacets({ ...emptyFacets, ...response.data.facets });
     } catch (err) {
-      setError("Failed to fetch articles. Please try again.");
-      console.error(err);
+      setError(getErrorMessage(err, "Failed to fetch articles"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchTerm, selectedCategories, selectedSources]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      navigate("/login", { replace: true });
+      return;
+    }
+    fetchArticles();
+  }, [isAuthenticated, navigate, fetchArticles]);
 
   const handleLogout = async () => {
     await logout();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
-  const filteredArticles = useMemo(() => {
-    return articles.filter((article) => {
-      const matchesSearch =
-        article.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        article.description?.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesCategory =
-        selectedCategory === "all" || article.category === selectedCategory;
+  /** Card toggles are multi-select: clicking an active card clears it. */
+  const makeToggle = (setter) => (value) =>
+    setter((prev) =>
+      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value],
+    );
 
-      // Match tags - if tags selected, article must have at least one selected tag
-      const matchesTags =
-        selectedTags.length === 0 ||
-        (article.tags &&
-          article.tags.some((tag) => selectedTags.includes(tag)));
+  const toggleCategory = makeToggle(setSelectedCategories);
+  const toggleSource = makeToggle(setSelectedSources);
 
-      return matchesSearch && matchesCategory && matchesTags;
-    });
-  }, [articles, searchTerm, selectedCategory, selectedTags]);
+  const resetFilters = () => {
+    setSearchInput("");
+    setSearchTerm("");
+    setSelectedCategories([]);
+    setSelectedSources([]);
+  };
 
-  // Group articles by source
+  const activeFilterCount = selectedCategories.length + selectedSources.length;
+
+  const hasFilters = searchTerm !== "" || activeFilterCount > 0;
+
   const groupedBySource = useMemo(() => {
     const groups = {};
-    filteredArticles.forEach((article) => {
+    for (const article of articles) {
       const source = article.source || "Unknown Source";
-      if (!groups[source]) {
-        groups[source] = [];
-      }
-      groups[source].push(article);
-    });
+      (groups[source] ||= []).push(article);
+    }
     return groups;
-  }, [filteredArticles]);
-
-  // Extract all unique tags from articles for filter options
-  const allTags = useMemo(() => {
-    const tagsSet = new Set();
-    articles.forEach((article) => {
-      if (article.tags && Array.isArray(article.tags)) {
-        article.tags.forEach((tag) => tagsSet.add(tag));
-      }
-    });
-    return Array.from(tagsSet).sort();
   }, [articles]);
 
-  // Get today's articles
-  const getTodayDate = () => {
-    const today = new Date();
-    return today.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  };
+  const ArticleGrid = ({ items = articles, className = "" }) => (
+    <div className={`grid-cards ${className}`.trim()}>
+      {items.map((article) => (
+        <ArticleCard
+          key={article._id}
+          article={article}
+          onClick={() => navigate(`/article/${article._id}`)}
+        />
+      ))}
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header */}
-      <header className="bg-white shadow-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between gap-4 flex-wrap md:flex-nowrap">
-            {/* Logo & Title */}
-            <div className="flex items-center gap-3">
-              <div className="bg-gradient-to-br from-blue-600 to-blue-700 p-2 rounded-lg shadow-md">
-                <Newspaper className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">CURA News</h1>
-                <p className="text-xs text-gray-600">{getTodayDate()}</p>
-              </div>
+    <div className="page">
+      <header className="site-header">
+        <div className="container site-header__inner">
+          <div className="brand">
+            <div className="brand__mark">
+              <Newspaper className="icon icon--lg" />
+            </div>
+            <div>
+              <h1 className="brand__name">CURA News</h1>
+              <p className="brand__date">{formatToday()}</p>
+            </div>
+          </div>
+
+          <div className="segmented" role="group" aria-label="View mode">
+            <button
+              onClick={() => setViewMode("grouped")}
+              aria-pressed={viewMode === "grouped"}
+              title="Group by source"
+              className={`segmented__option${
+                viewMode === "grouped" ? " segmented__option--active" : ""
+              }`}
+            >
+              <LayoutList className="icon icon--md" />
+              <span className="segmented__label">By Source</span>
+            </button>
+            <button
+              onClick={() => setViewMode("grid")}
+              aria-pressed={viewMode === "grid"}
+              title="Grid view"
+              className={`segmented__option${
+                viewMode === "grid" ? "segmented__option--active" : ""
+              }`}
+            >
+              <LayoutGrid className="icon icon--md" />
+              <span className="segmented__label">Grid</span>
+            </button>
+          </div>
+
+          <div className="row row-3">
+            <button
+              onClick={fetchArticles}
+              disabled={loading}
+              className="icon-btn"
+              title="Refresh articles"
+              aria-label="Refresh articles"
+            >
+              <RefreshCw
+                className={`icon icon--lg${loading ? " spinner spinner--sm" : ""}`}
+              />
+            </button>
+
+            <div className="user-chip">
+              <p className="user-chip__name">{user?.name || "User"}</p>
+              <p className="user-chip__email">{user?.email}</p>
             </div>
 
-            {/* View Mode Toggle */}
-            <div className="hidden sm:flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
-              <button
-                onClick={() => setViewMode("grouped")}
-                className={`px-3 py-1 rounded transition ${
-                  viewMode === "grouped"
-                    ? "bg-white text-blue-600 shadow-sm"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                By Source
-              </button>
-              <button
-                onClick={() => setViewMode("grid")}
-                className={`px-3 py-1 rounded transition ${
-                  viewMode === "grid"
-                    ? "bg-white text-blue-600 shadow-sm"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                Grid
-              </button>
-            </div>
-
-            {/* User Menu */}
-            <div className="flex items-center gap-3">
-              <button
-                onClick={fetchArticles}
-                disabled={loading}
-                className="p-2 hover:bg-gray-100 rounded-lg transition disabled:opacity-50"
-                title="Refresh articles"
-              >
-                <RefreshCw
-                  className={`w-5 h-5 text-gray-600 ${loading ? "animate-spin" : ""}`}
-                />
-              </button>
-              <div className="text-right hidden sm:block">
-                <p className="text-sm font-medium text-gray-900">
-                  {user?.fullName || "User"}
-                </p>
-                <p className="text-xs text-gray-600">{user?.email}</p>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="bg-red-600 hover:bg-red-700 text-white px-3 sm:px-4 py-2 rounded-lg flex items-center gap-2 transition shadow-md hover:shadow-lg"
-              >
-                <LogOut className="w-4 h-4" />
-                <span className="hidden sm:inline">Logout</span>
-              </button>
-            </div>
+            <button onClick={handleLogout} className="btn btn-danger btn-sm">
+              <LogOut className="icon icon--md" />
+              <span className="btn__label">Logout</span>
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Search and Filters */}
-        <div className="mb-8 space-y-4">
-          {/* Search Bar */}
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+      <main className="container page-body stack stack-6">
+        {/* Source cards */}
+        <section aria-label="Browse by source">
+          <h2 className="section-title source-section-head__title">
+            <Newspaper className="icon icon--md" />
+            Sources
+          </h2>
+
+          <div className="source-grid">
+            {NEWS_SOURCES.map((source) => {
+              const count = facets.bySource[source] || 0;
+              const active = selectedSources.includes(source);
+
+              return (
+                <button
+                  key={source}
+                  onClick={() => toggleSource(source)}
+                  aria-pressed={active}
+                  title={
+                    count === 0
+                      ? `${source}: no articles match the other filters`
+                      : `${source}: ${count} article${count === 1 ? "" : "s"}`
+                  }
+                  className={`source-card${active ? " source-card--active" : ""}`}
+                >
+                  <SourceLogo source={source} />
+                  <span className="source-card__meta">
+                    <span className="source-card__name">{source}</span>
+                    <span className="source-card__count">
+                      {count} {count === 1 ? "article" : "articles"}
+                    </span>
+                  </span>
+                  {active && (
+                    <Check className="source-card__check icon icon--md" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Topic cards */}
+        <section aria-label="Browse by category">
+          <div className="row row--between topic-section-head">
+            <h2 className="section-title topic-section-head__title">
+              <SlidersHorizontal className="icon icon--md" />
+              Browse topics
+            </h2>
+            {activeFilterCount > 0 && (
+              <button onClick={resetFilters} className="link-quiet">
+                Reset all ({activeFilterCount})
+              </button>
+            )}
+          </div>
+
+          <div className="topic-grid">
+            <button
+              onClick={() => setSelectedCategories([])}
+              aria-pressed={selectedCategories.length === 0}
+              className={`topic-card topic-card--all${
+                selectedCategories.length === 0 ? " topic-card--active" : ""
+              }`}
+            >
+              <span className="topic-card__icon">
+                <Newspaper className="icon icon--xl" />
+              </span>
+              <span className="topic-card__label">All</span>
+              <span className="topic-card__count">
+                {Object.values(facets.byCategory).reduce((a, b) => a + b, 0)}
+              </span>
+            </button>
+
+            {NEWS_CATEGORIES.map((category) => {
+              const Icon = CATEGORY_ICONS[category] || Shapes;
+              const count = facets.byCategory[category] || 0;
+              const active = selectedCategories.includes(category);
+
+              return (
+                <button
+                  key={category}
+                  onClick={() => toggleCategory(category)}
+                  aria-pressed={active}
+                  disabled={count === 0 && !active}
+                  title={
+                    count === 0
+                      ? `${category}: no articles match the other filters`
+                      : `${category}: ${count} article${count === 1 ? "" : "s"}`
+                  }
+                  className={`topic-card topic-card--${getCategoryClass(
+                    category,
+                  ).replace("cat-", "")}${active ? " topic-card--active" : ""}`}
+                >
+                  <span className="topic-card__icon">
+                    <Icon className="icon icon--xl" />
+                  </span>
+                  <span className="topic-card__label">{category}</span>
+                  <span className="topic-card__count">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Search. Category and source filtering live in the cards above. */}
+        <div className="stack stack-4">
+          <div className="search">
+            <Search className="search__icon icon icon--lg" />
             <input
               type="text"
-              placeholder="Search by title or description..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition shadow-sm"
+              placeholder="Search today's headlines, summaries and points..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="input"
+              aria-label="Search articles"
             />
+            {searchInput && (
+              <button
+                onClick={() => setSearchInput("")}
+                aria-label="Clear search"
+                className="field-toggle"
+              >
+                <X className="icon icon--lg" />
+              </button>
+            )}
           </div>
 
-          {/* Category Filter */}
-          <div className="flex items-center gap-3 flex-wrap">
-            <Filter className="w-5 h-5 text-gray-600" />
-            <div className="flex gap-2 flex-wrap">
-              {CATEGORIES.map((cat) => (
-                <button
-                  key={cat.value}
-                  onClick={() => setSelectedCategory(cat.value)}
-                  className={`px-4 py-2 rounded-full transition font-medium text-sm ${
-                    selectedCategory === cat.value
-                      ? "bg-blue-600 text-white shadow-md"
-                      : "bg-white text-gray-700 border border-gray-300 hover:border-blue-600"
-                  }`}
-                >
-                  {cat.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Tag Filter */}
-          {allTags.length > 0 && (
-            <div className="flex items-start gap-3 flex-wrap">
-              <Tag className="w-5 h-5 text-gray-600 flex-shrink-0 mt-0.5" />
-              <div className="flex gap-2 flex-wrap">
-                {allTags.map((tag) => (
-                  <button
-                    key={tag}
-                    onClick={() => {
-                      setSelectedTags((prev) =>
-                        prev.includes(tag)
-                          ? prev.filter((t) => t !== tag)
-                          : [...prev, tag],
-                      );
-                    }}
-                    className={`px-3 py-1.5 rounded-full transition font-medium text-sm flex items-center gap-1 ${
-                      selectedTags.includes(tag)
-                        ? "bg-purple-600 text-white shadow-md"
-                        : "bg-white text-gray-700 border border-gray-300 hover:border-purple-400"
-                    }`}
-                  >
-                    {tag}
-                    {selectedTags.includes(tag) && (
-                      <span className="ml-1 font-bold">✓</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Results Info and Clear Filters */}
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div className="text-sm text-gray-600">
-              <span className="font-semibold text-gray-900">
-                {filteredArticles.length}
-              </span>{" "}
-              articles found
-              {selectedTags.length > 0 && (
-                <span className="ml-2 text-purple-600 font-medium">
-                  (Tags: {selectedTags.join(", ")})
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              {selectedTags.length > 0 && (
-                <button
-                  onClick={() => setSelectedTags([])}
-                  className="text-sm text-gray-600 hover:text-gray-900 underline font-medium"
-                >
-                  Clear Tags
-                </button>
-              )}
-              {(selectedCategory !== "all" || selectedTags.length > 0) && (
-                <button
-                  onClick={() => {
-                    setSelectedCategory("all");
-                    setSelectedTags([]);
-                    setSearchTerm("");
-                  }}
-                  className="text-sm text-gray-600 hover:text-gray-900 underline font-medium"
-                >
-                  Reset All
-                </button>
-              )}
-              <div className="text-xs text-gray-500">
-                {viewMode === "grouped"
-                  ? `${Object.keys(groupedBySource).length} sources`
-                  : ""}
-              </div>
-            </div>
+          <div className="row row--between row--wrap">
+            <p className="text-sm text-muted">
+              <strong className="result-count">{total}</strong>{" "}
+              {total === 1 ? "article" : "articles"}
+              {searchTerm && <span className="active-filter-note"> for “{searchTerm}”</span>}
+            </p>
+            {hasFilters && (
+              <button onClick={resetFilters} className="link-quiet">
+                Reset all
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Error State */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div className="alert alert--error" role="alert">
+            <AlertCircle className="icon icon--lg" />
             <div>
-              <p className="font-semibold text-red-900">Error</p>
-              <p className="text-sm text-red-700">{error}</p>
+              <p className="alert-title">Error</p>
+              <p className="alert-body">{error}</p>
             </div>
           </div>
         )}
 
-        {/* Loading State */}
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-20">
-            <Loader className="w-12 h-12 text-blue-600 animate-spin mb-4" />
-            <p className="text-gray-600">Loading today's news...</p>
+          <div className="loading-state">
+            <Loader className="spinner spinner--xl" />
+            <p>Loading today's news...</p>
           </div>
-        ) : filteredArticles.length === 0 ? (
-          <div className="text-center py-20 bg-white rounded-lg border border-gray-200">
-            <Newspaper className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-600 text-lg mb-2">No articles found</p>
-            <p className="text-gray-500 text-sm">
-              Try adjusting your search or filters
+        ) : articles.length === 0 ? (
+          <div className="empty-state">
+            <Newspaper className="empty-state__icon icon--2xl" />
+            <p className="empty-state__title">
+              {hasFilters ? "No matching articles" : "No news for today"}
+            </p>
+            <p className="empty-state__hint">
+              {hasFilters
+                ? "Try removing a filter or widening your search"
+                : "Today's news is being prepared. Check back soon."}
             </p>
           </div>
         ) : viewMode === "grouped" ? (
-          // Grouped by Source View
-          <div className="space-y-8">
+          <div className="stack stack-8">
             {Object.entries(groupedBySource).map(([source, sourceArticles]) => (
-              <div key={source} className="space-y-4">
-                {/* Source Header */}
-                <div className="flex items-center gap-3">
-                  <div className="w-1 h-8 bg-gradient-to-b from-blue-600 to-blue-400 rounded-full"></div>
-                  <h2 className="text-xl font-bold text-gray-900">{source}</h2>
-                  <span className="ml-auto text-sm font-medium text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
-                    {sourceArticles.length} articles
+              <section key={source}>
+                <div className="source-heading">
+                  <div className="source-heading__rule" />
+                  <h2 className="source-heading__name">{source}</h2>
+                  <span className="spacer" />
+                  <span className="source-heading__count">
+                    {sourceArticles.length}{" "}
+                    {sourceArticles.length === 1 ? "article" : "articles"}
                   </span>
                 </div>
-
-                {/* Articles Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {sourceArticles.map((article) => (
-                    <ArticleCard
-                      key={article._id}
-                      article={article}
-                      onClick={() => navigate(`/article/${article._id}`)}
-                    />
-                  ))}
-                </div>
-              </div>
+                <ArticleGrid items={sourceArticles} />
+              </section>
             ))}
           </div>
         ) : (
-          // Grid View
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredArticles.map((article) => (
-              <ArticleCard
-                key={article._id}
-                article={article}
-                onClick={() => navigate(`/article/${article._id}`)}
-              />
-            ))}
-          </div>
+          <ArticleGrid />
         )}
       </main>
     </div>
   );
 }
 
-// Article Card Component
+/**
+ * Article card. Renders the actual News schema fields: headline, summary,
+ * bulletPoints, tags, category, source, date.
+ */
 function ArticleCard({ article, onClick }) {
-  const formatTime = (date) => {
-    const now = new Date();
-    const articleDate = new Date(date);
-    const diffMs = now - articleDate;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
+  const { headline, summary, bulletPoints, tags, category, topic, source, date, url } =
+    article;
+  const topicLabel = TOPIC_LABELS.find((label) =>
+    label.toLowerCase().replaceAll(" & ", "-").replaceAll(" ", "-") === topic,
+  ) || category;
+  const points = bulletPoints || [];
+  const sourceClass = {
+    "The Hindu": "article-card--the-hindu",
+    "Indian Express": "article-card--indian-express",
+    "Times of India": "article-card--times-of-india",
+  }[source] || "";
 
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    return `${diffDays}d ago`;
-  };
-
-  const getCategoryColor = (category) => {
-    const colors = {
-      technology: "bg-blue-100 text-blue-800",
-      business: "bg-purple-100 text-purple-800",
-      science: "bg-green-100 text-green-800",
-      health: "bg-red-100 text-red-800",
-      entertainment: "bg-pink-100 text-pink-800",
-      sports: "bg-orange-100 text-orange-800",
-    };
-    return colors[category] || "bg-gray-100 text-gray-800";
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
   };
 
   return (
     <article
       onClick={onClick}
-      className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer overflow-hidden group border border-gray-200 hover:border-blue-300 flex flex-col h-full"
+      onKeyDown={handleKeyDown}
+      role="button"
+      tabIndex={0}
+      aria-label={`Read article: ${headline}`}
+      className={`card card--hover article-card ${sourceClass}`}
     >
-      {/* Image Container */}
-      {article.imageUrl && (
-        <div className="relative w-full h-48 overflow-hidden bg-gray-200">
-          <img
-            src={article.imageUrl}
-            alt={article.title}
-            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-            onError={(e) => {
-              e.target.style.display = "none";
-            }}
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-        </div>
-      )}
-
-      {/* Card Content */}
-      <div className="p-5 flex flex-col flex-1">
-        {/* Header with Category and Time */}
-        <div className="flex items-start justify-between gap-2 mb-3">
-          <span
-            className={`text-xs font-semibold px-3 py-1 rounded-full flex-shrink-0 ${getCategoryColor(
-              article.category,
-            )}`}
-          >
-            {article.category || "News"}
+      <div className="article-card__body">
+        <div className="row row--between row-2 article-card__meta">
+          <span className={`badge ${getCategoryClass(topicLabel)}`}>
+            {topicLabel || "Other"}
           </span>
-          <span className="text-xs text-gray-500 flex items-center gap-1 flex-shrink-0">
-            <Calendar className="w-3 h-3" />
-            {formatTime(article.publishedAt)}
+          <span className="row row-1 article-card__time">
+            <Calendar className="icon icon--sm" />
+            {formatRelativeTime(date)}
           </span>
         </div>
 
-        {/* Title */}
-        <h3 className="font-bold text-gray-900 line-clamp-3 mb-3 group-hover:text-blue-600 transition">
-          {article.title}
-        </h3>
+        <h3 className="article-card__title line-clamp-3">{headline}</h3>
 
-        {/* Description/Summary */}
-        <p className="text-sm text-gray-600 line-clamp-3 mb-4 flex-grow">
-          {article.description || article.content || "No description available"}
+        <p className="article-card__summary line-clamp-3">
+          {summary || "No summary available"}
         </p>
 
-        {/* Source and Arrow */}
-        <div className="flex items-center justify-between pt-4 border-t border-gray-200">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-blue-600" />
-            <span className="text-xs font-medium text-gray-700">
-              {article.source || "News"}
-            </span>
-          </div>
-          <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 group-hover:translate-x-1 transition-all" />
+        {points.length > 0 && (
+          <ul className="article-card__points">
+            {points.slice(0, 2).map((point, idx) => (
+              <li key={idx} className="article-card__point line-clamp-1">
+                {point}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="article-card__footer">
+          <span className="article-card__source">{source || "Unknown source"}</span>
+          {url ? (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="article-card__link"
+            >
+              Read original
+              <ExternalLink className="icon icon--sm" />
+            </a>
+          ) : (
+            <ChevronRight className="icon icon--lg article-card__chevron" />
+          )}
         </div>
 
-        {/* Tags */}
-        {article.tags && article.tags.length > 0 && (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {article.tags.slice(0, 3).map((tag, idx) => (
-              <span
-                key={idx}
-                className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded flex items-center gap-1"
-              >
-                <Tag className="w-3 h-3" />
+        {tags?.length > 0 && (
+          <div className="article-card__tags">
+            {tags.slice(0, 3).map((tag) => (
+              <span key={tag} className={`badge badge--sm ${getTagClass(tag)}`}>
                 {tag}
               </span>
             ))}

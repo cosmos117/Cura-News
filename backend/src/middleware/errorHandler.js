@@ -1,9 +1,12 @@
+import { config } from "../config/env.js";
+
 /**
  * Custom Error Class
  */
 export class AppError extends Error {
   constructor(message, statusCode) {
     super(message);
+    this.name = "AppError";
     this.statusCode = statusCode;
     Error.captureStackTrace(this, this.constructor);
   }
@@ -30,14 +33,23 @@ export const asyncHandler = (fn) => {
  */
 export const errorHandler = (err, req, res, next) => {
   const statusCode = err.statusCode || 500;
-  const message = err.message || "Internal Server Error";
+  const isKnownError =
+    err instanceof AppError ||
+    err.name === "ValidationError" ||
+    err.name === "CastError" ||
+    err.code === 11000 ||
+    err.name === "JsonWebTokenError" ||
+    err.name === "TokenExpiredError" ||
+    err.name === "NotBeforeError";
 
-  // Log error in development
-  if (process.env.NODE_ENV === "development") {
+  // Unexpected errors: log the stack server-side but do not leak internals to
+  // the client. Known AppErrors are expected control flow and only logged in
+  // development.
+  if (!isKnownError || config.isDevelopment) {
     console.error("❌ Error:", {
       status: statusCode,
-      message: message,
-      stack: err.stack,
+      message: err.message,
+      ...(config.isDevelopment ? { stack: err.stack } : {}),
     });
   }
 
@@ -90,12 +102,20 @@ export const errorHandler = (err, req, res, next) => {
     });
   }
 
-  // Default error response
+  // Default error response. For an unrecognised error, never echo the raw
+  // message: it may carry upstream internals (API keys, connection strings).
+  const message =
+    err instanceof AppError || isKnownError
+      ? err.message || "Request failed"
+      : "Internal Server Error";
+
   res.status(statusCode).json({
     success: false,
     statusCode: statusCode,
-    message: message,
-    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
+    message,
+    ...(config.isDevelopment && err instanceof AppError
+      ? { stack: err.stack }
+      : {}),
   });
 };
 

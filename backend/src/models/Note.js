@@ -101,12 +101,21 @@ notesSchema.statics.findByUser = function (userId, options = {}) {
 /**
  * Static method: Find all notes for an article
  * @param {string} articleId - Article ID
+ * @param {Object} options - Query options (limit, skip)
  * @returns {Promise<Array>} - Array of notes
+ *
+ * Populates only the author's display name. Email is deliberately NOT
+ * selected: notes are readable per-article by anyone, so exposing addresses
+ * here would leak them to every visitor.
  */
-notesSchema.statics.findByArticle = function (articleId) {
+notesSchema.statics.findByArticle = function (articleId, options = {}) {
+  const { limit = 50, skip = 0 } = options;
+
   return this.find({ articleId })
-    .populate("userId", "name email")
-    .sort({ createdAt: -1 })
+    .populate("userId", "name")
+    .sort({ isPinned: -1, createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
     .exec();
 };
 

@@ -3,7 +3,6 @@ import { protect, optionalAuth } from "../middleware/authMiddleware.js";
 import {
   submitQuiz,
   getQuizForArticle,
-  getQuizAnswers,
   getQuizStats,
   analyzeQuiz,
 } from "../controllers/quizController.js";
@@ -109,41 +108,6 @@ router.post("/submit", optionalAuth, submitQuiz);
 router.get("/:articleId", getQuizForArticle);
 
 /**
- * GET /api/quiz/:articleId/answers
- * Get quiz with correct answers (for review)
- * Protected: Future auth - will require teacher/admin role
- * Used for grading and reviewing quizzes
- *
- * Parameters:
- * - articleId: MongoDB ObjectId of article
- *
- * Response:
- * {
- *   "success": true,
- *   "message": "Quiz answers retrieved successfully",
- *   "data": {
- *     "articleId": "...",
- *     "headline": "...",
- *     "date": "ISO timestamp",
- *     "totalQuestions": 4,
- *     "questions": [
- *       {
- *         "questionNumber": 1,
- *         "question": "What is the capital of India?",
- *         "options": ["Mumbai", "Delhi", "Bangalore", "Kolkata"],
- *         "correctAnswer": "B"  // Answer included
- *       },
- *       ...
- *     ]
- *   }
- * }
- *
- * Example cURL:
- * curl http://localhost:5000/api/quiz/507f1f77bcf86cd799439011/answers
- */
-router.get("/:articleId/answers", getQuizAnswers);
-
-/**
  * GET /api/quiz/stats/:articleId
  * Get quiz statistics for an article
  * Public: No authentication required
@@ -159,11 +123,7 @@ router.get("/:articleId/answers", getQuizAnswers);
  *   "data": {
  *     "articleId": "...",
  *     "headline": "...",
- *     "totalQuestions": 4,
- *     "totalAttempts": 150,
- *     "averageScore": 72,
- *     "passRate": 85,
- *     // Future fields available when submission tracking implemented
+ *     "totalQuestions": 4
  *   }
  * }
  *
@@ -190,9 +150,7 @@ router.get("/stats/:articleId", getQuizStats);
  *     "totalQuestions": 4,
  *     "analysis": {
  *       "avgQuestionLength": 85,
- *       "optionsFormat": "Always 4 options (A, B, C, D)",
- *       "estimatedDifficulty": "Medium",
- *       "suggestedTime": "10-15 minutes"
+ *       "optionsFormat": "Always 4 options (A, B, C, D)"
  *     }
  *   }
  * }

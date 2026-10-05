@@ -27,7 +27,7 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, "Please provide a password"],
-      minlength: [6, "Password must be at least 6 characters"],
+      minlength: [8, "Password must be at least 8 characters"],
       select: false, // Don't include password in queries by default
     },
     isActive: {
@@ -51,8 +51,8 @@ userSchema.pre("save", async function (next) {
   }
 
   try {
-    // Generate salt
-    const salt = await bcrypt.genSalt(10);
+    // Generate salt (12 rounds; the default 10 is below current guidance)
+    const salt = await bcrypt.genSalt(12);
     // Hash password
     this.password = await bcrypt.hash(this.password, salt);
     next();

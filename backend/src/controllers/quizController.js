@@ -169,54 +169,12 @@ export const getQuizForArticle = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * Get quiz answers (admin/review only)
- * GET /api/quiz/:articleId/answers
- * Protected: Requires admin authentication (future implementation)
- *
- * Returns quiz with correct answers
- * Used for reviewing/grading
- */
-export const getQuizAnswers = asyncHandler(async (req, res, next) => {
-  const { articleId } = req.params;
-
-  // Fetch article
-  const article = await News.findById(articleId).select("headline quiz date");
-
-  if (!article) {
-    throw new AppError("Article not found", 404);
-  }
-
-  if (!article.quiz || article.quiz.length === 0) {
-    throw new AppError("This article does not have a quiz", 404);
-  }
-
-  // Format quiz with answers
-  const quizData = article.quiz.map((q, index) => ({
-    questionNumber: index + 1,
-    question: q.question,
-    options: q.options,
-    correctAnswer: q.answer, // Answer included
-  }));
-
-  res.status(200).json({
-    success: true,
-    message: "Quiz answers retrieved successfully",
-    data: {
-      articleId: article._id,
-      headline: article.headline,
-      date: article.date,
-      totalQuestions: article.quiz.length,
-      questions: quizData,
-    },
-  });
-});
-
-/**
  * Get quiz statistics for an article
  * GET /api/quiz/stats/:articleId
  * Public: Shows how many users attempted and average score
  *
- * Future enhancement: Track quiz submissions to database
+ * Note: quiz submissions are not persisted, so attempt/score aggregates are
+ * not available. Do not advertise fields that are not returned.
  */
 export const getQuizStats = asyncHandler(async (req, res, next) => {
   const { articleId } = req.params;
@@ -241,24 +199,14 @@ export const getQuizStats = asyncHandler(async (req, res, next) => {
       articleId: article._id,
       headline: article.headline,
       totalQuestions: article.quiz.length,
-      // Future fields:
-      // totalAttempts: number,
-      // averageScore: number,
-      // passRate: percentage,
-      // difficultyLevel: "Easy" | "Medium" | "Hard"
     },
   });
 });
 
 /**
  * Get quiz difficulty analysis
- * POST /api/quiz/analysis
+ * POST /api/quiz/analysis/:articleId
  * Internal: Analyze quiz based on options (future ML feature)
- *
- * Could analyze:
- * - Question difficulty (based on plausibility of wrong answers)
- * - Average student performance
- * - Discriminative power (distinguishes high/low scorers)
  */
 export const analyzeQuiz = asyncHandler(async (req, res, next) => {
   const { articleId } = req.params;
@@ -284,10 +232,6 @@ export const analyzeQuiz = asyncHandler(async (req, res, next) => {
           article.quiz.length,
       ),
       optionsFormat: "Always 4 options (A, B, C, D)",
-      // Future metrics:
-      // estimatedDifficulty: "Medium",
-      // discriminativePower: 0.7,
-      // suggestedTime: "10-15 minutes"
     },
   };
 

@@ -1,6 +1,7 @@
 import axios from "axios";
 
-// Create Axios instance with base URL
+export const TOKEN_STORAGE_KEY = "authToken";
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
 
@@ -15,26 +16,40 @@ const apiClient = axios.create({
 // Add request interceptor to include auth token
 apiClient.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem("authToken");
+    const token = localStorage.getItem(TOKEN_STORAGE_KEY);
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  },
+  (error) => Promise.reject(error),
 );
+
+/**
+ * Called when the API rejects our token as expired/invalid.
+ *
+ * Set by AuthProvider so a 401 clears auth state through React rather than
+ * reloading the page. A full `window.location.href` reload discarded all SPA
+ * state, dropped the intended deep link (e.g. /article/:id), and fired once
+ * per in-flight request when several requests 401'd together.
+ */
+let onUnauthorized = null;
+
+export const setUnauthorizedHandler = (handler) => {
+  onUnauthorized = handler;
+};
 
 // Add response interceptor for error handling
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      // Handle unauthorized - redirect to login
-      localStorage.removeItem("authToken");
-      window.location.href = "/login";
+    const status = error.response?.status;
+
+    if (status === 401 && !error.config?.skipAuthRedirect) {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+      onUnauthorized?.();
     }
+
     return Promise.reject(error);
   },
 );

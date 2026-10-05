@@ -4,23 +4,30 @@ import {
   useEffect,
   useCallback,
   useContext,
+  useMemo,
 } from "react";
 import { authAPI } from "../services/api";
+import { setUnauthorizedHandler, TOKEN_STORAGE_KEY } from "../services/apiClient";
+import { getErrorMessage } from "../utils/format";
 
-export const AuthContext = createContext();
+export const AuthContext = createContext(null);
+
+const readStoredToken = () => localStorage.getItem(TOKEN_STORAGE_KEY);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem("authToken"));
-  const [loading, setLoading] = useState(false);
+  const [token, setToken] = useState(readStoredToken);
+  // Starts true when a token exists, so ProtectedRoute waits for the session
+  // check instead of rendering a redirect on the first frame. With `false`,
+  // a hard refresh of /dashboard bounced a valid session to /login.
+  const [loading, setLoading] = useState(() => Boolean(readStoredToken()));
   const [error, setError] = useState(null);
 
-  // Initialize user on mount
-  useEffect(() => {
-    if (token) {
-      fetchCurrentUser();
-    }
-  }, [token]);
+  const clearSession = useCallback(() => {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    setToken(null);
+    setUser(null);
+  }, []);
 
   const fetchCurrentUser = useCallback(async () => {
     setLoading(true);
@@ -28,15 +35,29 @@ export const AuthProvider = ({ children }) => {
       const response = await authAPI.getCurrentUser();
       setUser(response.data.user);
       setError(null);
-    } catch (err) {
-      console.error("Failed to fetch user:", err);
-      setUser(null);
-      localStorage.removeItem("authToken");
-      setToken(null);
+    } catch {
+      clearSession();
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clearSession]);
+
+  // Initialise user on mount / when the token changes
+  useEffect(() => {
+    if (token) {
+      fetchCurrentUser();
+    }
+  }, [token, fetchCurrentUser]);
+
+  // Let the axios interceptor route 401s through React state instead of a
+  // hard page reload.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      clearSession();
+      setError("Your session has expired. Please sign in again.");
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [clearSession]);
 
   const login = useCallback(async (email, password) => {
     setLoading(true);
@@ -45,12 +66,12 @@ export const AuthProvider = ({ children }) => {
       const response = await authAPI.login({ email, password });
       const { token: newToken, user: userData } = response.data;
 
-      localStorage.setItem("authToken", newToken);
+      localStorage.setItem(TOKEN_STORAGE_KEY, newToken);
       setToken(newToken);
       setUser(userData);
       return { success: true };
     } catch (err) {
-      const errorMsg = err.response?.data?.message || "Login failed";
+      const errorMsg = getErrorMessage(err, "Login failed");
       setError(errorMsg);
       return { success: false, error: errorMsg };
     } finally {
@@ -59,19 +80,29 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const register = useCallback(
-    async (email, password, confirmPassword, fullName) => {
+    async (email, password, confirmPassword, name) => {
       setLoading(true);
       setError(null);
       try {
         const response = await authAPI.register({
+          name,
           email,
           password,
           confirmPassword,
-          name: fullName,
         });
+
+        // The backend already issues a token on register. Use it instead of
+        // discarding it and forcing a second login round-trip.
+        const { token: newToken, user: userData } = response.data;
+        if (newToken) {
+          localStorage.setItem(TOKEN_STORAGE_KEY, newToken);
+          setToken(newToken);
+          setUser(userData);
+        }
+
         return { success: true, message: response.data.message };
       } catch (err) {
-        const errorMsg = err.response?.data?.message || "Registration failed";
+        const errorMsg = getErrorMessage(err, "Registration failed");
         setError(errorMsg);
         return { success: false, error: errorMsg };
       } finally {
@@ -82,27 +113,34 @@ export const AuthProvider = ({ children }) => {
   );
 
   const logout = useCallback(async () => {
+    setError(null);
     try {
       await authAPI.logout();
-    } catch (err) {
-      console.error("Logout error:", err);
+    } catch {
+      // The logout endpoint is best-effort; the client must always clear
+      // locally regardless of the response.
     } finally {
-      localStorage.removeItem("authToken");
-      setToken(null);
-      setUser(null);
+      clearSession();
     }
-  }, []);
+  }, [clearSession]);
 
-  const value = {
-    user,
-    token,
-    loading,
-    error,
-    isAuthenticated: !!token && !!user,
-    login,
-    register,
-    logout,
-  };
+  const clearError = useCallback(() => setError(null), []);
+
+  // Memoised so consumers only re-render when auth state actually changes.
+  const value = useMemo(
+    () => ({
+      user,
+      token,
+      loading,
+      error,
+      isAuthenticated: Boolean(token && user),
+      login,
+      register,
+      logout,
+      clearError,
+    }),
+    [user, token, loading, error, login, register, logout, clearError],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

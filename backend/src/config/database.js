@@ -1,30 +1,25 @@
 import mongoose from "mongoose";
+import { config } from "./env.js";
 
 /**
  * Connect to MongoDB
  * @returns {Promise<void>}
  */
 export const connectDB = async () => {
-  try {
-    const MONGO_URI = process.env.MONGO_URI;
+  // Uses the configured value so a missing .env falls back to the local
+  // default instead of crashing. The previous raw process.env read made
+  // config.MONGO_URI dead and turned a missing .env into a hard boot failure.
+  await mongoose.connect(config.MONGO_URI, {
+    // Both of these were removed/defaulted in Mongoose 6+/driver 4 and only
+    // produced deprecation noise.
+    serverSelectionTimeoutMS: 10000,
+  });
 
-    if (!MONGO_URI) {
-      throw new Error("MONGO_URI not defined in environment variables");
-    }
+  console.log(
+    `✅ MongoDB connected successfully at ${mongoose.connection.host}:${mongoose.connection.port}`,
+  );
 
-    const connection = await mongoose.connect(MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-
-    console.log(
-      `✅ MongoDB connected successfully at ${connection.connection.host}:${connection.connection.port}`,
-    );
-    return connection;
-  } catch (error) {
-    console.error(`❌ MongoDB connection failed: ${error.message}`);
-    process.exit(1);
-  }
+  return mongoose.connection;
 };
 
 /**
@@ -37,6 +32,5 @@ export const disconnectDB = async () => {
     console.log("MongoDB disconnected");
   } catch (error) {
     console.error("Error disconnecting from MongoDB:", error.message);
-    process.exit(1);
   }
 };

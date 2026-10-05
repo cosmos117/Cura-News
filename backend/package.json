@@ -7,7 +7,12 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node scripts/verify.mjs",
+    "feeds:check": "node scripts/check-feeds.mjs",
+    "topics:migrate": "node scripts/migrate-topics.mjs",
+    "topics:backfill": "node scripts/topics-backfill.mjs",
+    "topics:report": "node scripts/topics-report.mjs",
+    "topics:sample": "node scripts/topics-sample.mjs"
   },
   "keywords": [
     "news",
@@ -19,16 +24,26 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "express": "^4.18.0",
-    "dotenv": "^16.0.0",
-    "mongoose": "^7.0.0",
-    "cors": "^2.8.5",
-    "morgan": "^1.10.0",
-    "jsonwebtoken": "^9.0.0",
+    "@mozilla/readability": "^0.6.0",
+    "axios": "^1.3.0",
     "bcryptjs": "^2.4.3",
-    "axios": "^1.3.0"
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.0",
+    "express": "^4.18.0",
+    "express-rate-limit": "^7.5.1",
+    "jsdom": "^30.1.2",
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^7.0.0",
+    "morgan": "^1.10.0",
+    "robots-parser": "^3.0.1",
+    "rss-parser": "^3.13.0"
   },
   "devDependencies": {
+    "mongodb-memory-server": "^11.3.0",
     "nodemon": "^3.0.1"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "mongodb-memory-server": true
   }
 }
