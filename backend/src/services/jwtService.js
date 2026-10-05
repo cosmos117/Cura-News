@@ -2,6 +2,16 @@ import jwt from "jsonwebtoken";
 import { config } from "../config/env.js";
 
 /**
+ * Token issuer/audience claims.
+ *
+ * These are written on sign AND enforced on verify. Previously they were only
+ * signed, so any token minted with the same secret by another service would
+ * have been accepted by this API.
+ */
+const JWT_ISSUER = "cura-news-api";
+const JWT_AUDIENCE = "cura-news-client";
+
+/**
  * Generate JWT token
  * @param {string} userId - User ID to include in token
  * @returns {string} - JWT token
@@ -17,8 +27,8 @@ export const generateToken = (userId) => {
       config.JWT_SECRET, // Secret
       {
         expiresIn: config.JWT_EXPIRE, // Expiration time
-        issuer: "cura-news-api", // Token issuer
-        audience: "cura-news-client", // Token audience
+        issuer: JWT_ISSUER,
+        audience: JWT_AUDIENCE,
       },
     );
     return token;
@@ -39,33 +49,19 @@ export const verifyToken = (token) => {
   }
 
   try {
-    const decoded = jwt.verify(token, config.JWT_SECRET);
-    return decoded;
+    return jwt.verify(token, config.JWT_SECRET, {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      algorithms: ["HS256"],
+    });
   } catch (error) {
+    // Preserve the error name so the global error handler can classify the
+    // failure; the previous flattening to a bare Error erased it.
     if (error.name === "TokenExpiredError") {
-      throw new Error("Token has expired");
-    }
-    if (error.name === "JsonWebTokenError") {
-      throw new Error("Invalid token");
+      error.message = "Token has expired";
+      throw error;
     }
     throw error;
-  }
-};
-
-/**
- * Decode token without verification (for testing/debugging)
- * @param {string} token - JWT token to decode
- * @returns {Object} - Decoded token payload
- */
-export const decodeToken = (token) => {
-  if (!token) {
-    throw new Error("No token provided");
-  }
-
-  try {
-    return jwt.decode(token);
-  } catch (error) {
-    throw new Error(`Failed to decode token: ${error.message}`);
   }
 };
 

@@ -1,5 +1,5 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
@@ -8,8 +8,18 @@ export default defineConfig({
     open: true,
   },
   build: {
-    outDir: 'dist',
+    outDir: "dist",
     sourcemap: false,
-    minify: 'terser',
+    // esbuild is bundled with Vite. The previous value was 'terser' with
+    // terser not installed, so `npm run build` failed outright.
+    minify: "esbuild",
+    // Split the large icon library out of the main bundle.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+        },
+      },
+    },
   },
-})
+});

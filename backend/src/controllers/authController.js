@@ -23,13 +23,17 @@ export const register = asyncHandler(async (req, res, next) => {
   }
 
   // Password confirmation
+  if (!confirmPassword) {
+    throw new AppError("Please provide a password confirmation", 400);
+  }
+
   if (password !== confirmPassword) {
     throw new AppError("Passwords do not match", 400);
   }
 
   // Password strength check
-  if (password.length < 6) {
-    throw new AppError("Password must be at least 6 characters", 400);
+  if (password.length < 8) {
+    throw new AppError("Password must be at least 8 characters", 400);
   }
 
   // Email format check (basic)

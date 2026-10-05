@@ -6,6 +6,7 @@ import {
   logout,
 } from "../controllers/authController.js";
 import { protect } from "../middleware/authMiddleware.js";
+import { authLimiter } from "../middleware/rateLimiter.js";
 
 const router = express.Router();
 
@@ -38,7 +39,7 @@ const router = express.Router();
  *   }
  * }
  */
-router.post("/register", register);
+router.post("/register", authLimiter, register);
 
 /**
  * POST /api/auth/login
@@ -62,7 +63,7 @@ router.post("/register", register);
  *   }
  * }
  */
-router.post("/login", login);
+router.post("/login", authLimiter, login);
 
 /**
  * GET /api/auth/me
@@ -90,12 +91,11 @@ router.get("/me", protect, getCurrentUser);
 /**
  * POST /api/auth/logout
  * Logout user (Protected route)
- * Note: Frontend should remove token from localStorage
  *
- * Headers:
- * {
- *   "Authorization": "Bearer <token>"
- * }
+ * There is no server-side token store, so this cannot invalidate an issued
+ * JWT; the client discards its copy. A leaked token stays valid until it
+ * expires. Adding a tokenVersion claim on the User document would allow real
+ * server-side revocation.
  *
  * Response:
  * {

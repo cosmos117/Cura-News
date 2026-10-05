@@ -1,6 +1,6 @@
 /**
  * AI Summarization Controller
- * Handles requests to summarize articles using OpenAI
+ * Handles requests to summarize articles using the configured AI provider
  */
 
 import {
@@ -9,6 +9,7 @@ import {
   quickAnalyze,
 } from "../services/aiService.js";
 import { asyncHandler } from "../middleware/errorHandler.js";
+import { config } from "../config/env.js";
 
 /**
  * Summarize a single article
@@ -82,7 +83,7 @@ export const summarizeNewsArticle = asyncHandler(async (req, res) => {
       return res.status(401).json({
         success: false,
         statusCode: 401,
-        message: "AI service authentication failed - check OPENAI_API_KEY",
+        message: "AI service authentication failed - check Gemini/Groq API keys",
         error: error.message,
       });
     }
@@ -246,19 +247,26 @@ export const quickAnalyzeArticle = asyncHandler(async (req, res) => {
 });
 
 /**
- * Health check for AI service
+ * Configuration check for the AI service
  * GET /api/ai/health
+ *
+ * Reports whether a key is present. This is NOT a live probe - it does not
+ * call an AI provider - so it must not claim the service is "available" when only the
+ * key was found. A configured key can still be invalid or exhausted.
  */
 export const checkAIServiceHealth = asyncHandler(async (req, res) => {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKeyConfigured = Boolean(
+    config.GEMINI_API_KEY || config.GROQ_API_KEY,
+  );
 
   res.status(200).json({
     success: true,
     statusCode: 200,
     data: {
-      status: "AI service available",
-      apiKeyConfigured: !!apiKey,
-      service: "OpenAI GPT-4 Turbo",
+      status: apiKeyConfigured ? "configured" : "not_configured",
+      apiKeyConfigured,
+      service: `Gemini primary / Groq fallback`,
+      note: "Configuration check only. Does not verify keys against providers.",
       capabilities: [
         "Article summarization",
         "UPSC/CDS relevance filtering",

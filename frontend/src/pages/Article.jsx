@@ -1,7 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { newsAPI, quizAPI, notesAPI } from "../services/api";
+import { getCategoryClass, getTagClass } from "../constants/news";
+import { formatDate, getErrorMessage } from "../utils/format";
 import {
   ArrowLeft,
   Loader,
@@ -9,10 +11,8 @@ import {
   Sparkles,
   BookOpen,
   HelpCircle,
-  Heart,
   Clock,
-  User,
-  Share2,
+  Newspaper,
   CheckCircle,
   XCircle,
   MessageSquare,
@@ -20,142 +20,228 @@ import {
   Trash2,
   Tag,
   FileText,
+  ListChecks,
+  ExternalLink,
 } from "lucide-react";
+
+const NOTE_MIN = 10;
+const NOTE_MAX = 2000;
+
+const TABS = [
+  { id: "article", label: "Article", icon: FileText },
+  { id: "summary", label: "Summary", icon: Sparkles, requiresSummary: true },
+  { id: "quiz", label: "Quiz", icon: HelpCircle, requiresQuiz: true },
+  { id: "notes", label: "Notes", icon: BookOpen, requiresAuth: true },
+];
 
 export default function Article() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+
   const [article, setArticle] = useState(null);
-  const [summary, setSummary] = useState(null);
   const [quiz, setQuiz] = useState(null);
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("content");
+  const [activeTab, setActiveTab] = useState("article");
   const [error, setError] = useState(null);
-  const [liked, setLiked] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState({});
-  const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizResults, setQuizResults] = useState(null);
-  const [newNote, setNewNote] = useState({ title: "", content: "", tags: "" });
+  const [submittingQuiz, setSubmittingQuiz] = useState(false);
+  const [actionError, setActionError] = useState(null);
+  const [newNote, setNewNote] = useState({ content: "", tags: "" });
   const [showNoteForm, setShowNoteForm] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
+  const [generatingDetailed, setGeneratingDetailed] = useState(false);
 
-  useEffect(() => {
-    fetchArticle();
-  }, [id]);
-
-  const fetchArticle = async () => {
+  /**
+   * Load the article, then the quiz and notes.
+   *
+   * Quiz and notes are fetched separately so a failure in one does not blank
+   * the page. Each previously swallowed its error silently.
+   */
+  const fetchArticle = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const response = await newsAPI.getById(id);
       setArticle(response.data.data);
-
-      // Fetch summary if available
-      try {
-        const summaryResponse = await newsAPI.getSummary(id);
-        setSummary(summaryResponse.data.data.summary);
-      } catch (err) {
-        console.log("Summary not available");
-      }
-
-      // Fetch quiz if authenticated
-      if (isAuthenticated) {
-        try {
-          const quizResponse = await quizAPI.getQuiz(id);
-          setQuiz(quizResponse.data.data);
-        } catch (err) {
-          console.log("Quiz not available");
-        }
-
-        // Fetch notes
-        try {
-          const notesResponse = await notesAPI.getByArticle(id);
-          setNotes(notesResponse.data.data || []);
-        } catch (err) {
-          console.log("Notes not available");
-        }
-      }
     } catch (err) {
-      setError("Failed to load article");
-      console.error(err);
-    } finally {
+      setError(getErrorMessage(err, "Failed to load article"));
       setLoading(false);
-    }
-  };
-
-  const handleQuizAnswer = (questionIdx, answer) => {
-    setQuizAnswers((prev) => ({
-      ...prev,
-      [questionIdx]: answer,
-    }));
-  };
-
-  const handleSubmitQuiz = async () => {
-    if (Object.keys(quizAnswers).length !== quiz.questions?.length) {
-      alert("Please answer all questions");
       return;
     }
 
-    setQuizSubmitted(true);
-    const answers = Object.keys(quizAnswers)
-      .sort((a, b) => a - b)
-      .map((key) => quizAnswers[key]);
+    const [quizResult, notesResult] = await Promise.allSettled([
+      quizAPI.getQuiz(id),
+      notesAPI.getByArticle(id),
+    ]);
 
+    setQuiz(
+      quizResult.status === "fulfilled" ? quizResult.value.data.data : null,
+    );
+    setNotes(
+      notesResult.status === "fulfilled" ? notesResult.value.data.data || [] : [],
+    );
+
+    setLoading(false);
+  }, [id]);
+
+  // isAuthenticated is a dependency: if auth resolves after mount, the quiz
+  // and notes must still be fetched.
+  useEffect(() => {
+    fetchArticle();
+  }, [fetchArticle, isAuthenticated]);
+
+  // Reset tab state when navigating between articles
+  useEffect(() => {
+    setActiveTab("article");
+    setQuizAnswers({});
+    setQuizResults(null);
+    setActionError(null);
+  }, [id]);
+
+  useEffect(() => {
+    if (
+      activeTab !== "summary" ||
+      !article ||
+      article.detailedStatus === "DONE" ||
+      article.detailedStatus === "FAILED" ||
+      article.detailedStatus === "UNAVAILABLE"
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    let pollTimer;
+    setGeneratingDetailed(true);
+    setActionError(null);
+
+    const readUntilComplete = async () => {
+      try {
+        const response =
+          article.detailedStatus === "PENDING"
+            ? await newsAPI.getById(id)
+            : await newsAPI.generateDetailed(id);
+        const nextArticle = response.data?.data;
+        if (cancelled || !nextArticle) return;
+
+        setArticle(nextArticle);
+        if (
+          nextArticle.detailedStatus === "DONE" ||
+          nextArticle.detailedStatus === "FAILED" ||
+          nextArticle.detailedStatus === "UNAVAILABLE"
+        ) {
+          if (nextArticle.detailedStatus === "DONE") {
+            setActionError(null);
+          }
+          setGeneratingDetailed(false);
+          return;
+        }
+
+        pollTimer = window.setTimeout(readUntilComplete, 2000);
+      } catch (err) {
+        if (cancelled) return;
+        if (err.response?.data?.data) {
+          setArticle(err.response.data.data);
+        }
+        setActionError(
+          getErrorMessage(err, "Detailed summary generation failed"),
+        );
+        setGeneratingDetailed(false);
+      }
+    };
+
+    readUntilComplete();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(pollTimer);
+    };
+  }, [activeTab, article?.detailedStatus, id]);
+
+  const selectAnswer = (questionIdx, answer) =>
+    setQuizAnswers((prev) => ({ ...prev, [questionIdx]: answer }));
+
+  const handleSubmitQuiz = async () => {
+    const total = quiz?.questions?.length ?? 0;
+    if (Object.keys(quizAnswers).length !== total) {
+      setActionError("Please answer every question before submitting.");
+      return;
+    }
+
+    setSubmittingQuiz(true);
+    setActionError(null);
     try {
-      const response = await quizAPI.submitQuiz({
-        articleId: id,
-        answers,
-      });
+      const answers = Array.from({ length: total }, (_, i) => quizAnswers[i]);
+      const response = await quizAPI.submitQuiz({ articleId: id, answers });
       setQuizResults(response.data.data);
     } catch (err) {
-      alert("Failed to submit quiz");
-      console.error(err);
+      setActionError(getErrorMessage(err, "Failed to submit quiz"));
+    } finally {
+      setSubmittingQuiz(false);
     }
+  };
+
+  const retryQuiz = () => {
+    setQuizAnswers({});
+    setQuizResults(null);
+    setActionError(null);
   };
 
   const handleAddNote = async () => {
-    if (!newNote.title || !newNote.content) {
-      alert("Please fill in title and content");
+    const content = newNote.content.trim();
+
+    // The backend requires 10-2000 characters; validate here so the user gets
+    // a specific message instead of an opaque 400.
+    if (content.length < NOTE_MIN) {
+      setActionError(`Note must be at least ${NOTE_MIN} characters.`);
+      return;
+    }
+    if (content.length > NOTE_MAX) {
+      setActionError(`Note cannot exceed ${NOTE_MAX} characters.`);
       return;
     }
 
+    setSavingNote(true);
+    setActionError(null);
     try {
-      await notesAPI.create({
+      const response = await notesAPI.create({
         articleId: id,
-        title: newNote.title,
-        content: newNote.content,
+        content,
         tags: newNote.tags
           .split(",")
           .map((t) => t.trim())
-          .filter((t) => t),
+          .filter(Boolean),
       });
-      setNewNote({ title: "", content: "", tags: "" });
+      // Local update instead of a full page refetch.
+      setNotes((prev) => [response.data.data, ...prev]);
+      setNewNote({ content: "", tags: "" });
       setShowNoteForm(false);
-      fetchArticle();
     } catch (err) {
-      alert("Failed to create note");
-      console.error(err);
+      setActionError(getErrorMessage(err, "Failed to create note"));
+    } finally {
+      setSavingNote(false);
     }
   };
 
   const handleDeleteNote = async (noteId) => {
     if (!window.confirm("Delete this note?")) return;
+    setActionError(null);
     try {
       await notesAPI.delete(noteId);
-      fetchArticle();
+      setNotes((prev) => prev.filter((note) => note._id !== noteId));
     } catch (err) {
-      alert("Failed to delete note");
-      console.error(err);
+      setActionError(getErrorMessage(err, "Failed to delete note"));
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+      <div className="page page--centered">
         <div className="text-center">
-          <Loader className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">Loading article...</p>
+          <Loader className="spinner spinner--xl" />
+          <p className="text-muted loading-caption">Loading article...</p>
         </div>
       </div>
     );
@@ -163,24 +249,14 @@ export default function Article() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 p-4">
-        <div className="max-w-4xl mx-auto">
-          <button
-            onClick={() => navigate("/dashboard")}
-            className="flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-6 font-medium"
-          >
-            <ArrowLeft className="w-5 h-5" />
-            Back to Dashboard
-          </button>
-          <div className="bg-red-50 border-l-4 border-red-600 rounded-lg p-6">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <h3 className="font-bold text-red-900">
-                  Error Loading Article
-                </h3>
-                <p className="text-red-700 mt-1">{error}</p>
-              </div>
+      <div className="page page--centered">
+        <div className="container container--narrow stack stack-6">
+          <BackLink />
+          <div className="alert alert--error" role="alert">
+            <AlertCircle className="icon icon--xl" />
+            <div>
+              <p className="alert-title">Error loading article</p>
+              <p className="alert-body">{error}</p>
             </div>
           </div>
         </div>
@@ -190,105 +266,88 @@ export default function Article() {
 
   if (!article) {
     return (
-      <div className="min-h-screen bg-gray-50 p-4">
-        <button
-          onClick={() => navigate("/dashboard")}
-          className="flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-4"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Dashboard
-        </button>
-        <p className="text-gray-600">Article not found</p>
+      <div className="page page--centered">
+        <div className="container container--narrow stack stack-4">
+          <BackLink />
+          <p className="text-muted">Article not found</p>
+        </div>
       </div>
     );
   }
 
+  const {
+    headline,
+    summary,
+    detailedSummary,
+    detailedStatus,
+    detailedConfidence,
+    bulletPoints,
+    subtopics,
+    tags,
+    category,
+    source,
+    date,
+    url,
+  } = article;
+  const hasQuiz = Boolean(quiz?.questions?.length);
+
+  const visibleTabs = TABS.filter((tab) => {
+    if (tab.requiresSummary) return Boolean(summary);
+    if (tab.requiresQuiz) return hasQuiz && isAuthenticated;
+    if (tab.requiresAuth) return isAuthenticated;
+    return true;
+  });
+
+  // Fall back to a valid tab if the active one is no longer available
+  const currentTab = visibleTabs.some((t) => t.id === activeTab)
+    ? activeTab
+    : visibleTabs[0]?.id;
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header */}
-      <header className="bg-white shadow-md sticky top-0 z-50">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
-          <button
-            onClick={() => navigate("/dashboard")}
-            className="flex items-center gap-2 text-blue-600 hover:text-blue-700 transition font-medium"
-          >
-            <ArrowLeft className="w-5 h-5" />
-            <span className="hidden sm:inline">Back</span>
-          </button>
-          <div className="flex items-center gap-3">
-            <button
-              className="p-2 hover:bg-gray-100 rounded-lg transition"
-              title="Share article"
+    <div className="page">
+      <header className="site-header">
+        <div className="container container--narrow site-header__inner">
+          <BackLink />
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="article-original-link"
             >
-              <Share2 className="w-5 h-5 text-gray-600" />
-            </button>
-            <button
-              onClick={() => setLiked(!liked)}
-              className={`p-2 rounded-lg transition ${
-                liked
-                  ? "bg-red-100 text-red-600"
-                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              }`}
-            >
-              <Heart className={`w-5 h-5 ${liked ? "fill-current" : ""}`} />
-            </button>
-          </div>
+              Read original
+              <ExternalLink className="icon icon--md" />
+            </a>
+          )}
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Article Header */}
-        <article className="bg-white rounded-xl shadow-lg overflow-hidden mb-6">
-          {article.imageUrl && (
-            <img
-              src={article.imageUrl}
-              alt={article.title}
-              className="w-full h-96 object-cover"
-              onError={(e) => {
-                e.target.style.display = "none";
-              }}
-            />
-          )}
-          <div className="p-6 sm:p-10">
-            {/* Meta Info */}
-            <div className="flex flex-wrap items-center gap-4 mb-4 pb-4 border-b border-gray-200">
-              <span className="bg-blue-100 text-blue-800 text-xs font-bold px-3 py-1 rounded-full">
-                {article.category || "News"}
+      <main className="container container--narrow page-body stack stack-6">
+        <article className="card">
+          <div className="article-header">
+            <div className="article-meta">
+              <span className={`badge ${getCategoryClass(category)}`}>
+                {category || "Other"}
               </span>
-              <div className="flex items-center gap-2 text-gray-600 text-sm">
-                <Clock className="w-4 h-4" />
-                {new Date(article.publishedAt).toLocaleDateString("en-US", {
-                  year: "numeric",
-                  month: "short",
-                  day: "numeric",
-                })}
-              </div>
-              <div className="flex items-center gap-2 text-gray-600 text-sm">
-                <User className="w-4 h-4" />
-                {article.source || "News Source"}
-              </div>
+              <span className="article-meta__item">
+                <Newspaper className="icon icon--md" />
+                {source || "News"}
+              </span>
+              <span className="article-meta__item">
+                <Clock className="icon icon--md" />
+                {formatDate(date) || "Date unavailable"}
+              </span>
             </div>
 
-            {/* Title */}
-            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-4 leading-tight">
-              {article.title}
-            </h1>
+            <h1 className="article-title">{headline}</h1>
 
-            {/* Description */}
-            <p className="text-lg text-gray-600 leading-relaxed mb-6">
-              {article.description}
-            </p>
+            {summary && <p className="article-deck">{summary}</p>}
 
-            {/* Tags */}
-            {article.tags && article.tags.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {article.tags.map((tag, idx) => (
-                  <span
-                    key={idx}
-                    className="inline-flex items-center gap-1 bg-purple-100 text-purple-800 text-sm font-medium px-3 py-1 rounded-full"
-                  >
-                    <Tag className="w-3 h-3" />
+            {tags?.length > 0 && (
+              <div className="tag-list">
+                {tags.map((tag) => (
+                  <span key={tag} className={`badge ${getTagClass(tag)}`}>
+                    <Tag className="icon icon--sm" />
                     {tag}
                   </span>
                 ))}
@@ -297,395 +356,464 @@ export default function Article() {
           </div>
         </article>
 
-        {/* Tabs */}
-        <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-          {/* Tab Navigation */}
-          <div className="border-b border-gray-200 flex overflow-x-auto">
-            <button
-              onClick={() => setActiveTab("content")}
-              className={`flex-1 min-w-[140px] px-6 py-4 font-semibold text-center border-b-2 transition ${
-                activeTab === "content"
-                  ? "text-blue-600 border-blue-600 bg-blue-50"
-                  : "text-gray-600 border-transparent hover:text-gray-900"
-              }`}
-            >
-              <div className="flex items-center justify-center gap-2">
-                <FileText className="w-4 h-4" />
-                <span className="hidden sm:inline">Article</span>
-              </div>
-            </button>
-            {summary && (
-              <button
-                onClick={() => setActiveTab("summary")}
-                className={`flex-1 min-w-[140px] px-6 py-4 font-semibold text-center border-b-2 transition ${
-                  activeTab === "summary"
-                    ? "text-blue-600 border-blue-600 bg-blue-50"
-                    : "text-gray-600 border-transparent hover:text-gray-900"
-                }`}
-              >
-                <div className="flex items-center justify-center gap-2">
-                  <Sparkles className="w-4 h-4" />
-                  <span className="hidden sm:inline">Summary</span>
-                </div>
-              </button>
-            )}
-            {quiz && isAuthenticated && (
-              <button
-                onClick={() => setActiveTab("quiz")}
-                className={`flex-1 min-w-[140px] px-6 py-4 font-semibold text-center border-b-2 transition ${
-                  activeTab === "quiz"
-                    ? "text-blue-600 border-blue-600 bg-blue-50"
-                    : "text-gray-600 border-transparent hover:text-gray-900"
-                }`}
-              >
-                <div className="flex items-center justify-center gap-2">
-                  <HelpCircle className="w-4 h-4" />
-                  <span className="hidden sm:inline">Quiz</span>
-                </div>
-              </button>
-            )}
-            {isAuthenticated && (
-              <button
-                onClick={() => setActiveTab("notes")}
-                className={`flex-1 min-w-[140px] px-6 py-4 font-semibold text-center border-b-2 transition ${
-                  activeTab === "notes"
-                    ? "text-blue-600 border-blue-600 bg-blue-50"
-                    : "text-gray-600 border-transparent hover:text-gray-900"
-                }`}
-              >
-                <div className="flex items-center justify-center gap-2">
-                  <BookOpen className="w-4 h-4" />
-                  <span className="hidden sm:inline">Notes</span>
-                </div>
-              </button>
-            )}
+        <div className="card card--flush">
+          <div className="tabs" role="tablist">
+            {visibleTabs.map((tab) => {
+              const Icon = tab.icon;
+              const active = currentTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`tab${active ? " tab--active" : ""}`}
+                >
+                  <Icon className="icon icon--md" />
+                  <span className="tab__label">{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* Tab Content */}
-          <div className="p-6 sm:p-10">
-            {/* Full Article Content */}
-            {activeTab === "content" && (
-              <div className="prose prose-sm max-w-none">
-                <ContentRenderer
-                  content={article.content || article.description}
-                />
+          <div className="tab-panel">
+            {actionError && (
+              <div className="alert alert--error" role="alert">
+                <AlertCircle className="icon icon--lg" />
+                <p className="alert-body">{actionError}</p>
               </div>
             )}
 
-            {/* AI Summary */}
-            {activeTab === "summary" && summary && (
-              <div className="space-y-4">
-                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg p-6">
-                  <div className="flex items-start gap-3 mb-4">
-                    <Sparkles className="w-6 h-6 text-blue-600 mt-0.5 flex-shrink-0" />
-                    <div>
-                      <h3 className="font-bold text-blue-900 text-lg">
-                        AI-Generated Summary
-                      </h3>
-                      <p className="text-sm text-blue-700">
-                        Created by CURA AI
-                      </p>
+            {currentTab === "article" && (
+              <div className="stack stack-6">
+                {subtopics?.length > 0 && (
+                  <div>
+                    <h3 className="eyebrow">Subtopics</h3>
+                    <div className="tag-list">
+                      {subtopics.map((sub) => (
+                        <span key={sub} className="badge badge--gray">
+                          {sub}
+                        </span>
+                      ))}
                     </div>
                   </div>
-                  <p className="text-gray-800 leading-relaxed text-lg">
-                    {summary}
-                  </p>
+                )}
+
+                {bulletPoints?.length > 0 ? (
+                  <div>
+                    <h3 className="eyebrow">Key points</h3>
+                    <ul className="key-points">
+                      {bulletPoints.map((point, idx) => (
+                        <li key={idx} className="key-point">
+                          <ListChecks className="key-point__icon icon icon--lg" />
+                          <span>{point}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="text-muted">No content available.</p>
+                )}
+              </div>
+            )}
+
+            {currentTab === "summary" && summary && (
+              <div className="ai-summary">
+                <div className="ai-summary__head">
+                  <Sparkles className="icon icon--xl ai-summary__icon" />
+                  <div>
+                    <h3 className="ai-summary__title">AI-Generated Summary</h3>
+                    <p className="ai-summary__byline">Created by CURA AI</p>
+                  </div>
                 </div>
-              </div>
-            )}
-
-            {/* Quiz Section */}
-            {activeTab === "quiz" && quiz && (
-              <div className="space-y-6">
-                {quizSubmitted && quizResults ? (
-                  <div className="space-y-6">
-                    {/* Results Summary */}
-                    <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-200 rounded-lg p-6">
-                      <div className="text-center">
-                        <div className="inline-block bg-green-100 p-4 rounded-full mb-4">
-                          <CheckCircle className="w-12 h-12 text-green-600" />
-                        </div>
-                        <h3 className="text-2xl font-bold text-green-900 mb-2">
-                          Quiz Completed!
-                        </h3>
-                        <div className="grid grid-cols-3 gap-4 mt-6">
-                          <div>
-                            <p className="text-3xl font-bold text-green-600">
-                              {quizResults.score}
-                            </p>
-                            <p className="text-sm text-green-700">Score</p>
-                          </div>
-                          <div>
-                            <p className="text-3xl font-bold text-blue-600">
-                              {quizResults.total}
-                            </p>
-                            <p className="text-sm text-blue-700">Total</p>
-                          </div>
-                          <div>
-                            <p className="text-3xl font-bold text-purple-600">
-                              {quizResults.percentage}%
-                            </p>
-                            <p className="text-sm text-purple-700">
-                              Percentage
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-6 inline-block bg-gradient-to-r from-green-600 to-emerald-600 text-white px-6 py-2 rounded-full font-semibold">
-                          {quizResults.resultLevel}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Detailed Results */}
-                    <button
-                      onClick={() => setQuizSubmitted(false)}
-                      className="w-full text-blue-600 hover:text-blue-700 font-semibold py-2"
-                    >
-                      Review Answers
-                    </button>
+                {generatingDetailed || detailedStatus === "PENDING" ? (
+                  <div className="detailed-summary-loading">
+                    <Loader className="spinner spinner--md" />
+                    <p>Generating detailed summary...</p>
                   </div>
-                ) : (
-                  <div className="space-y-6">
-                    <div className="bg-blue-50 border-l-4 border-blue-600 p-4 rounded">
-                      <p className="text-blue-900 font-medium">
-                        Answer all {quiz.questions?.length} questions to test
-                        your knowledge
+                ) : detailedStatus === "DONE" && detailedSummary ? (
+                  <>
+                    {detailedConfidence === "low" && (
+                      <p className="ai-summary__notice">
+                        AI summary, verify at the original source.
                       </p>
-                    </div>
-
-                    {quiz.questions?.map((question, idx) => (
-                      <div
-                        key={idx}
-                        className="border border-gray-300 rounded-lg p-6 hover:shadow-md transition"
+                    )}
+                    {detailedSummary
+                      .split(/\n{2,}/)
+                      .map((paragraph, index) => (
+                        <p key={index} className="ai-summary__body">
+                          {paragraph}
+                        </p>
+                      ))}
+                  </>
+                ) : (
+                  <div className="stack stack-3">
+                    <p className="ai-summary__body">{summary}</p>
+                    <p className="ai-summary__notice">
+                      {detailedStatus === "UNAVAILABLE"
+                        ? "A detailed summary is unavailable for this article."
+                        : "The short summary is shown while a detailed summary is prepared."}
+                    </p>
+                    {url && (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="link"
                       >
-                        <div className="flex items-start gap-4 mb-4">
-                          <div className="flex items-center justify-center w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex-shrink-0">
-                            {idx + 1}
-                          </div>
-                          <p className="font-semibold text-gray-900 text-lg">
-                            {question.question}
-                          </p>
-                        </div>
-                        <div className="space-y-3 ml-12">
-                          {question.options?.map((option, optIdx) => {
-                            const letter = String.fromCharCode(65 + optIdx); // A, B, C, D
-                            const isSelected = quizAnswers[idx] === letter;
-                            return (
-                              <label
-                                key={optIdx}
-                                className={`flex items-center gap-3 p-4 border-2 rounded-lg cursor-pointer transition ${
-                                  isSelected
-                                    ? "border-blue-600 bg-blue-50"
-                                    : "border-gray-300 hover:border-gray-400 hover:bg-gray-50"
-                                }`}
-                              >
-                                <input
-                                  type="radio"
-                                  name={`q${idx}`}
-                                  value={letter}
-                                  checked={isSelected}
-                                  onChange={() => handleQuizAnswer(idx, letter)}
-                                  className="w-5 h-5 accent-blue-600"
-                                />
-                                <span className="font-medium text-gray-900">
-                                  {option}
-                                </span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-
-                    <button
-                      onClick={handleSubmitQuiz}
-                      className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 px-6 rounded-lg transition shadow-md hover:shadow-lg"
-                    >
-                      Submit Quiz
-                    </button>
+                        Read full story at source
+                      </a>
+                    )}
+                    {detailedStatus === "FAILED" && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setArticle((current) => ({
+                          ...current,
+                          detailedStatus: "NONE",
+                        }))}
+                      >
+                        Retry
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
             )}
 
-            {/* Notes Section */}
-            {activeTab === "notes" && (
-              <div className="space-y-6">
-                {/* New Note Form */}
-                {showNoteForm ? (
-                  <div className="bg-gradient-to-br from-yellow-50 to-amber-50 border-2 border-yellow-300 rounded-lg p-6 space-y-4">
-                    <h4 className="font-bold text-lg text-gray-900">
-                      Create New Note
-                    </h4>
-                    <input
-                      type="text"
-                      placeholder="Note title..."
-                      value={newNote.title}
-                      onChange={(e) =>
-                        setNewNote({
-                          ...newNote,
-                          title: e.target.value,
-                        })
-                      }
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none"
-                    />
-                    <textarea
-                      placeholder="Write your note here..."
-                      value={newNote.content}
-                      onChange={(e) =>
-                        setNewNote({
-                          ...newNote,
-                          content: e.target.value,
-                        })
-                      }
-                      rows="4"
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none resize-none"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Tags (comma-separated)"
-                      value={newNote.tags}
-                      onChange={(e) =>
-                        setNewNote({
-                          ...newNote,
-                          tags: e.target.value,
-                        })
-                      }
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none"
-                    />
-                    <div className="flex gap-3">
-                      <button
-                        onClick={handleAddNote}
-                        className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white font-semibold py-2 px-4 rounded-lg transition"
-                      >
-                        Save Note
-                      </button>
-                      <button
-                        onClick={() => setShowNoteForm(false)}
-                        className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-900 font-semibold py-2 px-4 rounded-lg transition"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setShowNoteForm(true)}
-                    className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg transition flex items-center justify-center gap-2 shadow-md hover:shadow-lg"
-                  >
-                    <Plus className="w-5 h-5" />
-                    Create New Note
-                  </button>
-                )}
+            {currentTab === "quiz" && hasQuiz && (
+              <QuizPanel
+                quiz={quiz}
+                answers={quizAnswers}
+                results={quizResults}
+                submitting={submittingQuiz}
+                onSelect={selectAnswer}
+                onSubmit={handleSubmitQuiz}
+                onRetry={retryQuiz}
+              />
+            )}
 
-                {/* Existing Notes */}
-                {notes.length === 0 ? (
-                  <div className="text-center py-12 bg-gray-50 rounded-lg border border-gray-200">
-                    <MessageSquare className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                    <p className="text-gray-600 mb-2">No notes yet</p>
-                    <p className="text-sm text-gray-500">
-                      Create your first note to get started
-                    </p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 gap-4">
-                    {notes.map((note) => (
-                      <div
-                        key={note._id}
-                        className="bg-gradient-to-br from-yellow-50 to-amber-50 border-2 border-yellow-200 rounded-lg p-6 hover:shadow-md transition"
-                      >
-                        <div className="flex items-start justify-between mb-3">
-                          <h5 className="font-bold text-lg text-gray-900">
-                            {note.title}
-                          </h5>
-                          <button
-                            onClick={() => handleDeleteNote(note._id)}
-                            className="text-red-600 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </div>
-                        <p className="text-gray-800 mb-4 leading-relaxed">
-                          {note.content}
-                        </p>
-                        {note.tags && note.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-2">
-                            {note.tags.map((tag, idx) => (
-                              <span
-                                key={idx}
-                                className="bg-yellow-200 text-yellow-800 text-xs font-semibold px-3 py-1 rounded-full"
-                              >
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+            {currentTab === "notes" && (
+              <NotesPanel
+                notes={notes}
+                currentUserId={user?.id}
+                newNote={newNote}
+                showForm={showNoteForm}
+                saving={savingNote}
+                onToggleForm={() => setShowNoteForm((prev) => !prev)}
+                onChange={(field, value) =>
+                  setNewNote((prev) => ({ ...prev, [field]: value }))
+                }
+                onSave={handleAddNote}
+                onDelete={handleDeleteNote}
+              />
             )}
           </div>
         </div>
       </main>
+      <footer className="site-footer">
+        Summaries are AI-generated and may contain errors. Always verify with the original source.
+      </footer>
     </div>
   );
 }
 
-// Content Renderer Component for bullet points and formatting
-function ContentRenderer({ content }) {
-  if (!content) {
-    return <p className="text-gray-600">No content available</p>;
+function BackLink() {
+  const navigate = useNavigate();
+  return (
+    <button
+      onClick={() => navigate("/dashboard")}
+      className="back-link"
+      aria-label="Back to dashboard"
+    >
+      <ArrowLeft className="icon icon--lg" />
+      <span className="back-link__label">Back</span>
+    </button>
+  );
+}
+
+function QuizPanel({
+  quiz,
+  answers,
+  results,
+  submitting,
+  onSelect,
+  onSubmit,
+  onRetry,
+}) {
+  if (results) {
+    const passed = results.percentage >= 60;
+
+    return (
+      <div className="stack stack-6">
+        <div
+          className={`quiz-result ${passed ? "quiz-result--pass" : "quiz-result--fail"}`}
+        >
+          {passed ? (
+            <CheckCircle className="icon--2xl quiz-result__icon--pass" />
+          ) : (
+            <XCircle className="icon--2xl quiz-result__icon--fail" />
+          )}
+
+          <h3 className="title-lg">Quiz Completed</h3>
+
+          <div className="quiz-score">
+            <div>
+              <p className="quiz-score__value quiz-score__value--score">
+                {results.score}
+              </p>
+              <p className="quiz-score__label">Score</p>
+            </div>
+            <div>
+              <p className="quiz-score__value quiz-score__value--total">
+                {results.total}
+              </p>
+              <p className="quiz-score__label">Total</p>
+            </div>
+            <div>
+              <p className="quiz-score__value quiz-score__value--percent">
+                {results.percentage}%
+              </p>
+              <p className="quiz-score__label">Percentage</p>
+            </div>
+          </div>
+
+          <div className="quiz-level">{results.resultLevel}</div>
+        </div>
+
+        {/* Per-question review, using the correctAnswer/isCorrect the API returns */}
+        <div className="stack stack-4">
+          <h4 className="section-title">Answer review</h4>
+          {results.questions?.map((q, idx) => (
+            <div
+              key={idx}
+              className={`quiz-review ${
+                q.isCorrect ? "quiz-review--correct" : "quiz-review--wrong"
+              }`}
+            >
+              {q.isCorrect ? (
+                <CheckCircle className="icon icon--lg quiz-review__icon--correct" />
+              ) : (
+                <XCircle className="icon icon--lg quiz-review__icon--wrong" />
+              )}
+              <div>
+                <p className="text-sm quiz-review__question">
+                  {q.questionNumber}. {q.question}
+                </p>
+                <p className="text-sm text-muted">
+                  Your answer: <strong>{q.userAnswer}</strong>
+                  {!q.isCorrect && (
+                    <>
+                      {" · Correct answer: "}
+                      <strong className="text-success">
+                        {q.correctAnswer}
+                      </strong>
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={onRetry} className="link block-link">
+          Retake Quiz
+        </button>
+      </div>
+    );
   }
 
-  const paragraphs = content.split("\n\n");
+  return (
+    <div className="stack stack-6">
+      <div className="quiz-intro">
+        Answer all {quiz.questions.length} questions to test your knowledge
+      </div>
+
+      {quiz.questions.map((question, idx) => (
+        <fieldset key={idx} className="quiz-question">
+          <legend className="sr-only">Question {idx + 1}</legend>
+          <div className="quiz-question__head">
+            <span className="quiz-question__number">{idx + 1}</span>
+            <p className="quiz-question__text">{question.question}</p>
+          </div>
+          <div className="quiz-question__options">
+            {question.options?.map((option, optIdx) => {
+              const letter = String.fromCharCode(65 + optIdx);
+              const isSelected = answers[idx] === letter;
+              return (
+                <label
+                  key={optIdx}
+                  className={`radio-option${
+                    isSelected ? " radio-option--selected" : ""
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name={`q${idx}`}
+                    value={letter}
+                    checked={isSelected}
+                    onChange={() => onSelect(idx, letter)}
+                  />
+                  <span className="option-label">
+                    <strong>{letter}.</strong> {option}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+      ))}
+
+      <button
+        onClick={onSubmit}
+        disabled={submitting}
+        className="btn btn-primary btn-cta"
+      >
+        {submitting ? "Submitting..." : "Submit Quiz"}
+      </button>
+    </div>
+  );
+}
+
+function NotesPanel({
+  notes,
+  currentUserId,
+  newNote,
+  showForm,
+  saving,
+  onToggleForm,
+  onChange,
+  onSave,
+  onDelete,
+}) {
+  const myNotes = notes.filter(
+    (note) => note.userId?._id && note.userId._id === currentUserId,
+  );
+  const otherNotes = notes.filter(
+    (note) => !note.userId?._id || note.userId._id !== currentUserId,
+  );
+
+  const NoteCard = ({ note, isMine }) => (
+    <div className={`note ${isMine ? "note--mine" : "note--other"}`}>
+      <div className="note__head">
+        <div className="note__author">
+          <Newspaper className="icon icon--md" />
+          <span className="note__author-name">{note.userId?.name || "Student"}</span>
+          {note.isPinned && <span className="badge badge--sm badge--amber">Pinned</span>}
+        </div>
+
+        {/* Delete is offered only on the caller's own notes. The public
+            per-article endpoint returns every user's notes; offering a delete
+            button on someone else's note was misleading (it fails with 403). */}
+        {isMine && (
+          <button
+            onClick={() => onDelete(note._id)}
+            className="icon-btn icon-btn--danger"
+            aria-label="Delete note"
+          >
+            <Trash2 className="icon icon--lg" />
+          </button>
+        )}
+      </div>
+
+      <p className="note__content">{note.content}</p>
+
+      {note.tags?.length > 0 && (
+        <div className="note__tags">
+          {note.tags.map((tag) => (
+            <span key={tag} className="badge badge--sm badge--amber">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <div className="space-y-6">
-      {paragraphs.map((paragraph, idx) => {
-        // Check if it's a bullet list
-        if (
-          paragraph.trim().startsWith("-") ||
-          paragraph.trim().startsWith("•")
-        ) {
-          const bullets = paragraph.split("\n").filter((line) => line.trim());
-          return (
-            <ul key={idx} className="space-y-3 ml-4">
-              {bullets.map((bullet, bIdx) => (
-                <li
-                  key={bIdx}
-                  className="flex items-start gap-3 text-gray-800 leading-relaxed"
-                >
-                  <span className="inline-flex items-center justify-center w-2 h-2 rounded-full bg-blue-600 flex-shrink-0 mt-2"></span>
-                  <span>{bullet.replace(/^[-•]\s*/, "")}</span>
-                </li>
-              ))}
-            </ul>
-          );
-        }
+    <div className="stack stack-6">
+      {showForm ? (
+        <div className="note-form stack stack-4">
+          <h4 className="title-md">Create New Note</h4>
 
-        // Check if it's a numbered list
-        if (/^\d+\./.test(paragraph.trim())) {
-          const items = paragraph.split("\n").filter((line) => line.trim());
-          return (
-            <ol key={idx} className="space-y-3 ml-4 list-decimal">
-              {items.map((item, iIdx) => (
-                <li key={iIdx} className="text-gray-800 leading-relaxed ml-4">
-                  {item.replace(/^\d+\.\s*/, "")}
-                </li>
-              ))}
-            </ol>
-          );
-        }
+          <textarea
+            placeholder="What stood out in this article?"
+            value={newNote.content}
+            onChange={(e) => onChange("content", e.target.value)}
+            rows={4}
+            maxLength={NOTE_MAX}
+            className="textarea"
+            aria-label="Note content"
+          />
 
-        // Regular paragraph
-        return (
-          <p key={idx} className="text-gray-800 leading-relaxed text-base">
-            {paragraph}
-          </p>
-        );
-      })}
+          <div className="field-hint-row">
+            <span>
+              {NOTE_MIN}-{NOTE_MAX} characters
+            </span>
+            <span>
+              {newNote.content.length}/{NOTE_MAX}
+            </span>
+          </div>
+
+          <input
+            type="text"
+            placeholder="Tags (comma-separated, max 5)"
+            value={newNote.tags}
+            onChange={(e) => onChange("tags", e.target.value)}
+            className="input"
+            aria-label="Note tags"
+          />
+
+          <div className="row row-3">
+            <button
+              onClick={onSave}
+              disabled={saving}
+              className="btn btn-warning btn-block-sm"
+            >
+              {saving ? "Saving..." : "Save Note"}
+            </button>
+            <button onClick={onToggleForm} className="btn btn-secondary btn-block-sm">
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={onToggleForm} className="btn btn-success btn-block">
+          <Plus className="icon icon--lg" />
+          Create New Note
+        </button>
+      )}
+
+      <section>
+        <h4 className="section-title">Your notes ({myNotes.length})</h4>
+        {myNotes.length === 0 ? (
+          <div className="empty-state">
+            <MessageSquare className="empty-state__icon icon--2xl" />
+            <p className="empty-state__title">
+              You have not saved any notes on this article
+            </p>
+          </div>
+        ) : (
+          <div className="note-list">
+            {myNotes.map((note) => (
+              <NoteCard key={note._id} note={note} isMine />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {otherNotes.length > 0 && (
+        <section>
+          <h4 className="section-title">
+            Notes from other students ({otherNotes.length})
+          </h4>
+          <div className="note-list">
+            {otherNotes.map((note) => (
+              <NoteCard key={note._id} note={note} isMine={false} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

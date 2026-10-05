@@ -31,6 +31,21 @@ If the article is not relevant to UPSC/CDS exams, return:
 const VALID_TAGS = ["Polity", "Economy", "Defense", "Science", "International"];
 
 /**
+ * Valid broad categories. The AI is only consulted for `category` after the
+ * feed label and keyword rules both come up empty, so this is a fallback and
+ * must never invalidate an otherwise good summary.
+ */
+const VALID_CATEGORIES = [
+  "Politics",
+  "Business",
+  "Sports",
+  "Tech",
+  "World",
+  "Entertainment",
+  "Other",
+];
+
+/**
  * Validate the AI response
  * @param {object} data - Parsed JSON response
  * @returns {object} Validation result with isValid and errors
@@ -99,6 +114,21 @@ function validateResponse(data) {
     });
   }
 
+  // Validate category (optional, single value). A bad or missing category is
+  // coerced rather than rejected: the caller only uses the AI's category as a
+  // last-resort fallback, and discarding an otherwise valid summary over it
+  // would waste the whole call.
+  if (data.category !== undefined) {
+    if (
+      typeof data.category !== "string" ||
+      !VALID_CATEGORIES.includes(data.category)
+    ) {
+      data.category = "Other";
+    }
+  } else {
+    data.category = "Other";
+  }
+
   // Validate subtopics (optional, 0-5)
   if (data.subtopics) {
     if (!Array.isArray(data.subtopics) || data.subtopics.length > 5) {
@@ -143,20 +173,97 @@ function validateResponse(data) {
 }
 
 /**
+ * Generate and parse a structured JSON response using the shared AI client.
+ */
+export async function generateStructured({
+  systemPrompt,
+  userPrompt,
+  maxTokens = 1800,
+  temperature = 0.2,
+}) {
+  const callGroq = async () => {
+    if (!env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is not configured");
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: env.GROQ_MODEL,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature,
+        max_tokens: maxTokens,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${env.GROQ_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 30000,
+      },
+    );
+    return response.data?.choices?.[0]?.message?.content;
+  };
+
+  const callGemini = async () => {
+    if (!env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`,
+      {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        generationConfig: {
+          temperature,
+          maxOutputTokens: maxTokens,
+          responseMimeType: "application/json",
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+      },
+      { timeout: 30000 },
+    );
+    return response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  };
+
+  let content;
+  const primary = env.AI_PROVIDER.toLowerCase() === "groq" ? callGroq : callGemini;
+  const fallback = env.AI_PROVIDER.toLowerCase() === "groq" ? callGemini : callGroq;
+  try {
+    content = await primary();
+  } catch (primaryError) {
+    try {
+      content = await fallback();
+    } catch (fallbackError) {
+      throw new Error(
+        `AI providers failed: primary=${primaryError.message}; fallback=${fallbackError.message}`,
+      );
+    }
+  }
+
+  if (!content || typeof content !== "string") {
+    throw new Error("AI returned an empty structured response");
+  }
+
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  return JSON.parse((fenced ? fenced[1] : content).trim());
+}
+
+/**
  * Call OpenAI API with retry logic
  * @param {string} userMessage - User's article text
  * @param {number} retries - Number of retries remaining
  * @returns {Promise<object>} Parsed JSON response
  */
 async function callOpenAIAPI(userMessage, retries = 3) {
-  const apiKey = env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY not configured in environment variables");
-  }
+  return generateStructured({
+    systemPrompt: SYSTEM_PROMPT,
+    userPrompt: `Please analyze this news article and return the existing CURA JSON schema:
+${userMessage}`,
+    maxTokens: 1500,
+    temperature: 0.7,
+  });
 
   const requestBody = {
-    model: "gpt-4-turbo",
+    model: env.OPENAI_MODEL,
     messages: [
       {
         role: "system",
@@ -171,6 +278,7 @@ async function callOpenAIAPI(userMessage, retries = 3) {
   "summary": "3-line summary (50-1000 chars)",
   "bulletPoints": ["Point 1", "Point 2", "Point 3"],
   "tags": ["Polity/Economy/Defense/Science/International"],
+  "category": "Politics/Business/Sports/Tech/World/Entertainment/Other",
   "subtopics": ["Optional subtopic 1"],
   "quiz": [
     {
@@ -217,7 +325,11 @@ ${userMessage}`,
   } catch (error) {
     // Handle specific error types
     if (error.response?.status === 401) {
-      throw new Error("OpenAI API authentication failed - invalid API key");
+      const authError = new Error(
+        "OpenAI API authentication failed - invalid API key",
+      );
+      authError.statusCode = 401;
+      throw authError;
     }
 
     if (error.response?.status === 429) {
@@ -228,7 +340,11 @@ ${userMessage}`,
         );
         return callOpenAIAPI(userMessage, retries - 1);
       }
-      throw new Error("OpenAI API rate limited - too many requests");
+      const rateLimitError = new Error(
+        "OpenAI API rate limited - too many requests",
+      );
+      rateLimitError.statusCode = 429;
+      throw rateLimitError;
     }
 
     if (error.response?.status === 500) {
@@ -292,31 +408,45 @@ export async function summarizeArticle(articleText) {
       );
     }
 
-    // Ensure all required fields exist
+    // Ensure all required fields exist.
+    // NOTE: deliberately no `source` key here. `source` is the publisher in
+    // the News schema (enum-constrained) and this is the publisher-less AI
+    // output; emitting "ai-generated" overwrote the real source downstream and
+    // failed News validation for every article.
     return {
       headline: result.headline,
       summary: result.summary,
       bulletPoints: result.bulletPoints,
       tags: result.tags,
+      category: result.category,
       subtopics: result.subtopics || [],
       quiz: result.quiz || [],
-      source: "ai-generated",
       processedAt: new Date(),
     };
   } catch (error) {
-    // Enhanced error handling
-    if (error.message.includes("not relevant to UPSC/CDS")) {
-      throw {
-        statusCode: 400,
-        message: "Article not relevant to UPSC/CDS exam preparation",
-        isNotRelevant: true,
-      };
+    // Enhanced error handling. These must be real Error instances: throwing
+    // plain objects left `.name` and `.stack` undefined, which defeated every
+    // error-name branch in the global error handler.
+    if (error.isNotRelevant || error.message?.includes("not relevant to UPSC/CDS")) {
+      const notRelevant = new Error(
+        "Article not relevant to UPSC/CDS exam preparation",
+      );
+      notRelevant.statusCode = 400;
+      notRelevant.isNotRelevant = true;
+      throw notRelevant;
     }
 
-    throw {
-      statusCode: 500,
-      message: error.message || "Failed to summarize article",
-    };
+    if (error.statusCode && error.statusCode !== 500) {
+      throw error;
+    }
+
+    if (error.statusCode === 401) {
+      throw error;
+    }
+
+    const wrapped = new Error(error.message || "Failed to summarize article");
+    wrapped.statusCode = 500;
+    throw wrapped;
   }
 }
 
@@ -400,7 +530,7 @@ Do NOT include markdown formatting.`;
     const response = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
-        model: "gpt-4-turbo",
+        model: env.OPENAI_MODEL,
         messages: [
           {
             role: "system",
@@ -436,4 +566,5 @@ export default {
   summarizeArticle,
   summarizeArticles,
   quickAnalyze,
+  generateStructured,
 };

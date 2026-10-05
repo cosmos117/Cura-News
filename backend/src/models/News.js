@@ -1,4 +1,16 @@
 import mongoose from "mongoose";
+import { utcDayRange } from "../utils/date.js";
+import { NEWS_CATEGORIES, DEFAULT_CATEGORY } from "../utils/category.js";
+import { TOPIC_IDS } from "../config/topics.js";
+
+const DETAILED_STATUSES = [
+  "NONE",
+  "PENDING",
+  "DONE",
+  "FAILED",
+  "UNAVAILABLE",
+];
+const DETAIL_SOURCE_TYPES = ["FULL_TEXT", "SNIPPET_ONLY"];
 
 /**
  * Quiz Schema - Embedded in News
@@ -49,6 +61,44 @@ const newsSchema = new mongoose.Schema(
       default: Date.now,
       index: true, // Index for fast date queries
     },
+    publishedAt: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
+    section: {
+      type: String,
+      trim: true,
+      maxlength: 100,
+    },
+    sourceId: {
+      type: String,
+      trim: true,
+    },
+    feedId: {
+      type: String,
+      trim: true,
+    },
+    summaryStatus: {
+      type: String,
+      enum: ["PENDING", "SUMMARIZED", "FAILED", "SKIPPED"],
+      default: "SUMMARIZED",
+    },
+    summaryAttempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    lastError: {
+      type: String,
+      maxlength: 500,
+    },
+    summarizedAt: {
+      type: Date,
+    },
+    modelUsed: {
+      type: String,
+    },
     headline: {
       type: String,
       required: [true, "Please provide a headline"],
@@ -63,12 +113,36 @@ const newsSchema = new mongoose.Schema(
       minlength: [50, "Summary must be at least 50 characters"],
       maxlength: [1000, "Summary cannot exceed 1000 characters"],
     },
+    detailedSummary: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    detailedStatus: {
+      type: String,
+      enum: DETAILED_STATUSES,
+      default: "NONE",
+      index: true,
+    },
+    detailedGeneratedAt: {
+      type: Date,
+      default: null,
+    },
+    detailedConfidence: {
+      type: String,
+      enum: ["high", "medium", "low"],
+    },
+    detailSourceType: {
+      type: String,
+      enum: DETAIL_SOURCE_TYPES,
+    },
     bulletPoints: {
       type: [String],
       required: [true, "Please provide bullet points"],
       validate: {
+        // An unset array path arrives as [], not undefined.
         validator: function (points) {
-          return points && points.length >= 3 && points.length <= 10;
+          return Array.isArray(points) && points.length >= 3 && points.length <= 10;
         },
         message: "Must have between 3 and 10 bullet points",
       },
@@ -81,6 +155,29 @@ const newsSchema = new mongoose.Schema(
         message:
           "Tags must be one of: Polity, Economy, Defense, Science, International",
       },
+      topic: {
+        type: String,
+        enum: TOPIC_IDS,
+        index: true,
+        default: null,
+      },
+      secondaryTopics: {
+        type: [String],
+        enum: TOPIC_IDS,
+        default: [],
+        validate: {
+          validator: (topics) => topics.length <= 2,
+          message: "Cannot have more than 2 secondary topics",
+        },
+      },
+      topicSource: {
+        type: String,
+        enum: ["SECTION", "KEYWORD", "AI", "MANUAL"],
+      },
+      topicConfidence: {
+        type: String,
+        enum: ["high", "medium", "low"],
+      },
       index: true, // Index for fast tag queries
       validate: {
         validator: function (tags) {
@@ -88,6 +185,26 @@ const newsSchema = new mongoose.Schema(
         },
         message: "Must have between 1 and 3 tags",
       },
+    },
+    /**
+     * Broad news category, used for the topic cards and category chip bar.
+     *
+     * Deliberately separate from `tags`, which is the UPSC syllabus view
+     * (Polity/Economy/Defense/Science/International). An article can be
+     * category "Tech" and tagged "Science" at the same time, and collapsing
+     * the two vocabularies would break the syllabus tagging.
+     *
+     * Defaults to "Other" rather than being required so that pre-existing
+     * documents and manual POST /news calls without a category still store.
+     */
+    category: {
+      type: String,
+      enum: {
+        values: NEWS_CATEGORIES,
+        message: `Category must be one of: ${NEWS_CATEGORIES.join(", ")}`,
+      },
+      default: DEFAULT_CATEGORY,
+      index: true,
     },
     subtopics: {
       type: [String],
@@ -101,8 +218,11 @@ const newsSchema = new mongoose.Schema(
     quiz: {
       type: [quizSchema],
       validate: {
+        // Quiz is optional. Mongoose passes an empty ARRAY (not undefined) to
+        // validators for unset array paths, so a naive `!quiz` check always
+        // failed and made it impossible to store any article without a quiz.
         validator: function (quiz) {
-          return !quiz || (quiz.length >= 3 && quiz.length <= 5);
+          return !quiz || quiz.length === 0 || (quiz.length >= 3 && quiz.length <= 5);
         },
         message: "Must have between 3 and 5 quiz questions",
       },
@@ -137,6 +257,17 @@ newsSchema.index({ date: -1 });
 newsSchema.index({ tags: 1, date: -1 });
 
 /**
+ * Index for category queries combined with the day window
+ */
+newsSchema.index({ category: 1, date: -1 });
+newsSchema.index({ topic: 1, date: -1 });
+
+/**
+ * Index for selecting recent articles by detailed-summary state.
+ */
+newsSchema.index({ date: -1, detailedStatus: 1 });
+
+/**
  * Index for full-text search on headline and summary
  */
 newsSchema.index({ headline: "text", summary: "text" });
@@ -157,14 +288,6 @@ newsSchema.methods.getPublicNews = function () {
 };
 
 /**
- * Instance method: Get news with quiz answers visible (for admin/teacher)
- * @returns {Object} - News object with complete quiz info
- */
-newsSchema.methods.getAdminNews = function () {
-  return this.toObject();
-};
-
-/**
  * Query helper: Only get published news
  */
 newsSchema.query.published = function () {
@@ -177,6 +300,14 @@ newsSchema.query.published = function () {
 newsSchema.query.byTags = function (tags) {
   if (!tags || tags.length === 0) return this;
   return this.where({ tags: { $in: tags } });
+};
+
+/**
+ * Query helper: Filter by one or more categories
+ */
+newsSchema.query.byCategory = function (categories) {
+  if (!categories || categories.length === 0) return this;
+  return this.where({ category: { $in: categories } });
 };
 
 /**
@@ -194,20 +325,13 @@ newsSchema.query.byDateRange = function (startDate, endDate) {
 
 /**
  * Query helper: Only get today's news
+ *
+ * Uses UTC boundaries to match the UTC timestamps from NewsAPI. Server-local
+ * midnight shifted the window on any non-UTC deployment.
  */
 newsSchema.query.today = function () {
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-
-  const endOfDay = new Date();
-  endOfDay.setHours(23, 59, 59, 999);
-
-  return this.where({
-    date: {
-      $gte: startOfDay,
-      $lte: endOfDay,
-    },
-  });
+  const now = new Date();
+  return this.where({ date: utcDayRange(now) });
 };
 
 const News = mongoose.model("News", newsSchema);

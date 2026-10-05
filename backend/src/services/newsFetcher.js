@@ -56,14 +56,9 @@ const NEWS_CONFIG = {
     "Weather",
   ],
 
-  // Indian sources preferred
-  SOURCES: [
-    "the-hindu",
-    "indian-express",
-    "times-of-india",
-    "bbc-news",
-    "reuters",
-  ],
+  // Sources the News model can actually store. Passing these to NewsAPI avoids
+  // fetching articles that _normalizeArticle would immediately discard.
+  SOURCES: ["the-hindu", "indian-express", "times-of-india"],
 
   // Language
   LANGUAGE: "en",
@@ -97,6 +92,7 @@ class NewsFetcher {
       pageSize = 30,
       page = 1,
       sortBy = NEWS_CONFIG.SORT_BY,
+      sources = NEWS_CONFIG.SOURCES,
     } = options;
 
     if (!this.apiKey) {
@@ -121,14 +117,11 @@ class NewsFetcher {
           language: NEWS_CONFIG.LANGUAGE,
           pageSize: Math.min(pageSize, 100),
           page: page,
+          sources: Array.isArray(sources) ? sources.join(",") : sources,
           apiKey: this.apiKey,
         },
         timeout: NEWS_CONFIG.TIMEOUT,
       });
-
-      if (response.status !== 200) {
-        throw new Error(`NewsAPI returned status ${response.status}`);
-      }
 
       const { articles, totalResults } = response.data;
 
@@ -151,10 +144,34 @@ class NewsFetcher {
 
       return normalized;
     } catch (error) {
-      console.error("❌ Error fetching from NewsAPI:", error.message);
+      // Distinguish "upstream is broken" from "no results today". Swallowing
+      // every error here made a bad API key, an expired plan and a rate limit
+      // all look identical to a quiet news cycle, and the pipeline reported 0
+      // fetched with no signal that anything was wrong.
+      const status = error.response?.status;
+      const detail = `status=${status ?? "n/a"} ${error.message}`;
 
-      // Return empty array on error (pipeline continues)
-      return [];
+      if (status === 401) {
+        console.error(
+          `❌ NewsAPI rejected the API key (${detail}). Check NEWS_API_KEY.`,
+        );
+        throw new Error(`NewsAPI authentication failed: ${detail}`);
+      }
+
+      if (status === 426) {
+        console.error(
+          `❌ NewsAPI plan does not permit this request (${detail}). Upgrading is required.`,
+        );
+        throw new Error(`NewsAPI plan upgrade required: ${detail}`);
+      }
+
+      if (status === 429) {
+        console.error(`❌ NewsAPI rate limit hit (${detail}).`);
+        throw new Error(`NewsAPI rate limited: ${detail}`);
+      }
+
+      console.error(`❌ Error fetching from NewsAPI: ${detail}`);
+      throw new Error(`NewsAPI request failed: ${detail}`);
     }
   }
 
@@ -172,6 +189,7 @@ class NewsFetcher {
       urlToImage,
       url,
       publishedAt,
+      category,
     } = article;
 
     // Basic validation
@@ -190,19 +208,26 @@ class NewsFetcher {
       }
     }
 
-    // Normalize source to CURA NEWS enum
-    const sourceMap = {
+    // Normalize source to CURA NEWS enum. Anything not in the News model enum is
+    // DROPPED rather than relabelled - silently attributing a Reuters or BBC
+    // article to "The Hindu" misrepresents the publisher and corrupts the
+    // bySource stats.
+    const SUPPORTED_SOURCES = {
       "the-hindu": "The Hindu",
       "indian-express": "Indian Express",
       "times-of-india": "Times of India",
-      bbc: "The Hindu", // Default to The Hindu for non-supported sources
-      reuters: "The Hindu",
     };
 
     const sourceName =
-      sourceMap[source?.id?.toLowerCase()] ||
-      sourceMap[source?.name?.toLowerCase()] ||
-      "The Hindu"; // Default source
+      SUPPORTED_SOURCES[source?.id?.toLowerCase()] ||
+      SUPPORTED_SOURCES[source?.name?.toLowerCase()];
+
+    if (!sourceName) {
+      console.log(
+        `🚫 Filtered (unsupported source "${source?.name || "unknown"}"): "${title.substring(0, 50)}..."`,
+      );
+      return null;
+    }
 
     return {
       headline: title,
@@ -213,6 +238,11 @@ class NewsFetcher {
       image: urlToImage,
       publishedAt: new Date(publishedAt),
       rawSource: source?.name || "Unknown",
+      // The publisher's own category label. Named `rssCategory` rather than
+      // `category` so it can never collide with the AI's category in the
+      // processor's `{ ...aiFields, ...article }` merge, and so the priority
+      // order (feed > keywords > AI) stays explicit.
+      rssCategory: category || null,
     };
   }
 
@@ -224,6 +254,7 @@ class NewsFetcher {
    */
   async fetchMultipleKeywords(keywords = [], pageSize = 10) {
     const allArticles = [];
+    const failures = [];
 
     for (const keyword of keywords) {
       try {
@@ -240,12 +271,27 @@ class NewsFetcher {
           `Failed to fetch for keyword "${keyword}":`,
           error.message,
         );
-        // Continue with next keyword
+        failures.push({ keyword, error: error.message });
       }
     }
 
     // Remove duplicates by URL
     const unique = this._deduplicateByUrl(allArticles);
+
+    // Every keyword failing means the upstream is unusable, not that there is
+    // simply no news. Propagate so the pipeline reports an error.
+    if (unique.length === 0 && failures.length > 0) {
+      throw new Error(
+        `All ${failures.length} NewsAPI requests failed. First error: ${failures[0].error}`,
+      );
+    }
+
+    if (failures.length > 0) {
+      console.warn(
+        `⚠️  ${failures.length}/${keywords.length} keyword fetches failed`,
+      );
+    }
+
     console.log(
       `✅ Total unique articles: ${unique.length} from ${allArticles.length}`,
     );
@@ -259,7 +305,9 @@ class NewsFetcher {
    */
   async fetchDailyNews() {
     console.log("🌅 Starting daily news fetch...");
-    return await this.fetchMultipleKeywords(NEWS_CONFIG.KEYWORDS, 5);
+    // Fetch more candidates per keyword without increasing the number of
+    // NewsAPI requests; deduplication and relevance filtering happen later.
+    return await this.fetchMultipleKeywords(NEWS_CONFIG.KEYWORDS, 10);
   }
 
   /**

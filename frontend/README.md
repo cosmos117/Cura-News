@@ -5,7 +5,7 @@ A modern React + Vite frontend for the CURA News AI-powered news summarization p
 ## 🎯 Features
 
 - ✅ **React 18** with Vite for fast development
-- ✅ **Tailwind CSS** for responsive design
+- ✅ **Plain CSS design system** for responsive design (no CSS framework)
 - ✅ **React Router v6** for client-side routing
 - ✅ **Axios** with interceptors for API communication
 - ✅ **Authentication Context** for state management
@@ -30,11 +30,9 @@ frontend/
 │   │   └── api.js            # API endpoint functions
 │   ├── App.jsx               # Main app with routing
 │   ├── main.jsx              # React entry point
-│   └── index.css             # Tailwind & global styles
+│   └── index.css             # Design tokens + all component styles
 ├── index.html                # HTML template
 ├── vite.config.js            # Vite configuration
-├── tailwind.config.js        # Tailwind CSS configuration
-├── postcss.config.js         # PostCSS configuration
 ├── package.json              # Dependencies & scripts
 ├── .env.example              # Environment variables template
 └── .gitignore                # Git ignore rules
@@ -83,32 +81,32 @@ npm run preview
 
 - User login form
 - Email & password validation
-- Error handling with toast notifications
+- Password visibility toggle
+- Inline error message
 - Redirect to dashboard on success
 
 #### `Signup.jsx`
 
 - User registration form
 - Password confirmation validation
-- Success toast and redirect to login
-- Form validation
+- Inline error message and redirect to dashboard
+- Live min-length hint and mismatch warnings
 
 #### `Dashboard.jsx`
 
-- News articles grid layout
-- Search articles by title/description
-- Filter by category
-- Click article to view details
-- Responsive grid (1, 2, 3 columns)
+- Article cards grouped by source, plus a flat grid view
+- Client-side search across headline, summary, bullet points and tags
+- Tag filter pills (server-side filtering via the `tags` query param)
+- Empty and error states
 
 #### `Article.jsx`
 
-- Full article content display
-- Tabbed interface:
-  - **Full Article**: Complete content
+- Article header with source, date and tags
+- Tabbed interface (tabs appear only when the data exists):
+  - **Article**: subtopics and bullet points
   - **AI Summary**: AI-generated summary (if available)
-  - **Quiz**: Interactive quiz (if available)
-  - **My Notes**: User's saved notes
+  - **Quiz**: interactive quiz with per-question review (authenticated)
+  - **Notes**: create/delete notes, and see other students' notes
 
 ### **Context**
 
@@ -139,12 +137,25 @@ npm run preview
   - `notesAPI`: Note management
   - `quizAPI`: Quiz submission & retrieval
 
-## 🎨 Tailwind CSS Setup
+## 🎨 Styling
 
-- **Configured for:** React/JSX files
-- **Custom Colors:** primary (blue), secondary (gray), accent (amber)
-- **Utilities:** Full Tailwind utility classes available
-- **Responsive:** Mobile-first responsive design
+There is **no CSS framework**. `src/index.css` is the single stylesheet and is
+organised as a design system:
+
+- **Custom properties** — colour, spacing, radius, shadow and type-scale tokens
+  defined once on `:root`, plus responsive overrides in the media queries
+- **Semantic class names** — `.card`, `.btn`, `.input`, `.alert`, `.badge`,
+  `.pill`, `.tab`, `.quiz-question`, `.note`, `.article-card`, `.site-header`,
+  `.auth-card`. Components reference these, never raw layout utilities
+- **BEM-style modifiers** — `--active`, `--error`, `--danger`, `--correct`
+  for state variants (`.tab--active`, `.input--error`)
+- **Responsive** — mobile-first; layout, header and segmented-control label
+  rules collapse under `@media (max-width: 768px)`
+- **Reduced motion** — animations are disabled under
+  `@media (prefers-reduced-motion: reduce)`
+
+To restyle, edit the token block at the top of `index.css`; to add a component
+style, add a block in the matching numbered section.
 
 ## 🔐 Authentication Flow
 
@@ -169,24 +180,28 @@ const BASE_URL =
 
 ```javascript
 // Request with auth token
-GET / api / news;
-Header: Authorization: Bearer <
-  token >
-  // Response
-  {
-    success: true,
-    data: [
-      {
-        _id: "...",
-        title: "Article title",
-        description: "...",
-        content: "...",
-        category: "technology",
-        imageUrl: "...",
-        publishedAt: "2024-03-17T...",
-      },
-    ],
-  };
+GET /news?tags=Polity&limit=50&skip=0
+Header: Authorization: Bearer <token>
+
+// Response
+{
+  success: true,
+  count: 2,
+  data: [
+    {
+      _id: "...",
+      source: "The Hindu",
+      date: "2024-03-17",
+      headline: "Article headline",
+      summary: "AI-written summary",
+      bulletPoints: ["point one", "point two"],
+      tags: ["Polity"],
+      subtopics: ["Parliament"],
+      quiz: [],
+      url: "https://...",
+    },
+  ],
+}
 ```
 
 ## 📦 Dependencies
@@ -196,16 +211,12 @@ Header: Authorization: Bearer <
 - `react@18.2.0` - UI library
 - `react-dom@18.2.0` - React DOM rendering
 - `react-router-dom@6.20.0` - Client-side routing
-
-### Utilities
-
 - `axios@1.6.5` - HTTP client
 - `lucide-react@0.294.0` - Icon library
 
 ### Styling
 
-- `tailwindcss@3.3.6` - Utility-first CSS
-- `autoprefixer@10.4.16` - Vendor prefixes
+None. Styling ships as plain CSS in `src/index.css`.
 
 ### Build Tools
 
@@ -214,31 +225,24 @@ Header: Authorization: Bearer <
 
 ## 🎯 Next Steps / Enhancements
 
-1. **Add Components**
-   - Navbar component
-   - Footer component
-   - Loading skeleton
-   - Error boundary
-
-2. **Features to Add**
-   - Quiz submission functionality
-   - Note creation/editing
+1. **Features to Add**
+   - Server-side full-text search (the `GET /news/search` endpoint is unused;
+     the dashboard searches the loaded page in memory)
    - User profile page
    - Favorites/bookmarks
-   - Comment system
+   - Note editing (create and delete are implemented)
 
-3. **Optimization**
+2. **Optimization**
    - Lazy load page components
-   - Image optimization
    - Caching strategies
    - Code splitting
 
-4. **Testing**
+3. **Testing**
    - Add Vitest for unit tests
    - Add React Testing Library
    - E2E testing with Cypress
 
-5. **Deployment**
+4. **Deployment**
    - Configure CI/CD pipeline
    - Deploy to Vercel, Netlify, or GitHub Pages
    - Configure environment variables for production
@@ -246,7 +250,7 @@ Header: Authorization: Bearer <
 ## 🛠️ Development Commands
 
 ```bash
-# Start dev server
+# Start dev server (http://localhost:3000)
 npm run dev
 
 # Build for production
@@ -254,13 +258,9 @@ npm run build
 
 # Preview production build
 npm run preview
-
-# Format code (add Prettier)
-npm run format
-
-# Lint code (add ESLint)
-npm run lint
 ```
+
+There are no `format` or `lint` scripts yet.
 
 ## 📱 Responsive Breakpoints
 
@@ -276,14 +276,15 @@ npm run lint
 | POST   | `/auth/login`       | User login           |
 | POST   | `/auth/logout`      | User logout          |
 | GET    | `/auth/me`          | Current user profile |
-| GET    | `/news`             | Get all articles     |
+| GET    | `/news`             | List articles (`tags`, `limit`, `skip`) |
 | GET    | `/news/:id`         | Get article details  |
-| GET    | `/news/:id/summary` | Get AI summary       |
-| POST   | `/ai/summarize`     | Generate summary     |
-| GET    | `/quiz/:articleId`  | Get quiz             |
-| POST   | `/quiz/submit`      | Submit quiz answers  |
-| GET    | `/notes`            | Get user notes       |
+| GET    | `/notes/article/:id` | Notes for one article |
 | POST   | `/notes`            | Create note          |
+| DELETE | `/notes/:id`        | Delete own note      |
+| GET    | `/quiz/:articleId`  | Get quiz (no answers)|
+| POST   | `/quiz/submit`      | Submit quiz answers  |
+
+See the root `README.md` for the full endpoint table and data models.
 
 ## 💡 Tips & Best Practices
 

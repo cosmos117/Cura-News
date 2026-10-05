@@ -20,11 +20,9 @@ frontend/
 │   │   └── api.js             ✅ All API endpoint functions
 │   ├── App.jsx                ✅ Main router with protected routes
 │   ├── main.jsx               ✅ React entry point
-│   └── index.css              ✅ Tailwind + global styles
+│   └── index.css              ✅ Design tokens + all component styles
 ├── index.html                 ✅ HTML template
 ├── vite.config.js             ✅ Vite configuration
-├── tailwind.config.js         ✅ Tailwind CSS config
-├── postcss.config.js          ✅ PostCSS config
 ├── package.json               ✅ All dependencies included
 ├── .env.example               ✅ Environment template
 ├── .gitignore                 ✅ Git ignore rules
@@ -45,10 +43,10 @@ This will install:
 - ✅ React 18.2.0
 - ✅ React Router DOM 6.20.0
 - ✅ Axios 1.6.5
-- ✅ Tailwind CSS 3.3.6
 - ✅ Lucide React Icons
 - ✅ Vite 5.0.8
-- ✅ PostCSS & Autoprefixer
+
+There is no CSS framework, PostCSS step, or build-time style compiler.
 
 ### 2. Setup Environment
 
@@ -78,18 +76,9 @@ Visit: http://localhost:3000
 
 - Development server on port 3000
 - Auto-open in browser
-- Minified production build
-
-**tailwind.config.js**
-
-- Configured for React/JSX
-- Custom colors (primary, secondary, accent)
-- All standard Tailwind utilities
-
-**postcss.config.js**
-
-- Tailwind CSS processing
-- Auto vendor prefixes
+- esbuild minification (terser was configured but never installed, which broke
+  `npm run build`)
+- `react` chunk split out of the main bundle
 
 **package.json**
 
@@ -119,7 +108,7 @@ Visit: http://localhost:3000
 
 - `App.jsx`: React Router setup with protected routes
 - `main.jsx`: React DOM rendering
-- `index.css`: Tailwind directives + global styles
+- `index.css`: The entire stylesheet — tokens plus numbered component sections
 
 ## 🔐 Authentication Features
 
@@ -142,29 +131,33 @@ Visit: http://localhost:3000
 
 ## 🎨 UI Components & Styling
 
-### Tailwind CSS Features Used
+### Plain CSS design system
 
-- Responsive grid layout
-- Flexbox utilities
-- Hover effects & transitions
-- Color utilities
-- Border & shadow utilities
-- Opacity utilities
-- Animation utilities
+All styling lives in `src/index.css` as semantic classes — there are no
+utility classes in the JSX:
+
+- **Tokens** — colour, spacing, radius, shadow and type-scale custom
+  properties on `:root`
+- **Components** — `.card`, `.btn`, `.input`, `.alert`, `.badge`, `.pill`,
+  `.tab`, `.quiz-question`, `.note`, `.article-card`, `.site-header`,
+  `.auth-card`, `.spinner`, `.empty-state`, `.error-state`
+- **Modifiers** — `--active`, `--error`, `--danger`, `--pass`, `--fail`
+- **Hooks** — `--hover`, `--flush`, `--pad`, `--centered`
 
 ### Icons (Lucide React)
 
 - Mail, Lock, User (forms)
-- Newspaper, Search, Filter (articles)
-- Heart, Sparkles, HelpCircle, BookOpen (features)
+- Newspaper, Search, Tag (articles)
+- Sparkles, HelpCircle, BookOpen (features)
 - ArrowLeft, AlertCircle, Loader (navigation & feedback)
 
 ### Responsive Design
 
 - Mobile-first approach
-- Breakpoints: sm (640px), md (768px), lg (1024px)
+- Grid, header and segmented-control label rules collapse at 768px
 - Flexible grid layouts
 - Touch-friendly buttons
+- Animations disabled under `prefers-reduced-motion`
 
 ## 📡 API Integration
 
@@ -197,6 +190,8 @@ All organized in `services/api.js`:
 2. Add route in `App.jsx`
 3. Import page component
 4. Use `useAuth()` for auth-protected pages
+5. Style with existing semantic classes; add a new block in `index.css` only
+   if nothing fits
 
 ### To Add a New Component
 
@@ -292,7 +287,7 @@ npm run build
 
 - [React Documentation](https://react.dev)
 - [React Router Docs](https://reactrouter.com)
-- [Tailwind CSS Docs](https://tailwindcss.com)
+- [MDN CSS Reference](https://developer.mozilla.org/en-US/docs/Web/CSS)
 - [Axios Documentation](https://axios-http.com)
 - [Vite Documentation](https://vitejs.dev)
 

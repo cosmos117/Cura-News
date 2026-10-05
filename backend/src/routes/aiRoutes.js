@@ -1,9 +1,15 @@
 /**
  * AI Summarization Routes
  * Endpoints for article summarization and analysis using OpenAI
+ *
+ * Every endpoint here bills a real OpenAI request, so all of them require
+ * authentication and are rate limited. They were previously fully anonymous
+ * with no throttle, so a scripted loop could exhaust the API budget in minutes.
  */
 
 import express from "express";
+import { protect } from "../middleware/authMiddleware.js";
+import { aiLimiter } from "../middleware/rateLimiter.js";
 import {
   summarizeNewsArticle,
   batchSummarizeArticles,
@@ -15,7 +21,7 @@ const router = express.Router();
 
 /**
  * POST /api/ai/summarize
- * Summarize a single news article
+ * Summarize a single news article. Protected + rate limited.
  *
  * Request Body:
  * {
@@ -24,126 +30,43 @@ const router = express.Router();
  *   "originalUrl": "string (optional - original article URL)"
  * }
  *
- * Response:
- * {
- *   "success": true,
- *   "data": {
- *     "headline": "string",
- *     "summary": "string (3 lines)",
- *     "bulletPoints": ["string"],
- *     "tags": ["Polity/Economy/Defense/Science/International"],
- *     "subtopics": ["string"],
- *     "quiz": [{"question": "...", "options": [...], "answer": "A-D"}],
- *     "source": "string",
- *     "url": "string",
- *     "processedAt": "ISO timestamp"
- *   }
- * }
- *
  * Example cURL:
  * curl -X POST http://localhost:5000/api/ai/summarize \
+ *   -H "Authorization: Bearer $TOKEN" \
  *   -H "Content-Type: application/json" \
- *   -d '{
- *     "articleText": "The Union Budget 2026 was announced today with focus on infrastructure. The government allocated $100 billion for new projects...",
- *     "source": "The Hindu",
- *     "originalUrl": "https://thehindu.com/..."
- *   }'
+ *   -d '{"articleText":"The Union Budget 2026 was announced today..."}'
  */
-router.post("/summarize", summarizeNewsArticle);
+router.post("/summarize", protect, aiLimiter, summarizeNewsArticle);
 
 /**
  * POST /api/ai/batch-summarize
- * Summarize multiple articles in one request
- * Maximum 10 articles per batch
+ * Summarize multiple articles in one request. Maximum 10 per batch.
  *
  * Request Body:
  * {
  *   "articles": ["article text 1", "article text 2", ...]
  * }
  *
- * Response:
- * {
- *   "success": true,
- *   "data": {
- *     "total": 3,
- *     "successful": 3,
- *     "failed": 0,
- *     "results": [
- *       {
- *         "index": 0,
- *         "success": true,
- *         "data": {...}
- *       }
- *     ],
- *     "errors": []
- *   }
- * }
- *
- * Example cURL:
- * curl -X POST http://localhost:5000/api/ai/batch-summarize \
- *   -H "Content-Type: application/json" \
- *   -d '{
- *     "articles": [
- *       "First article text here...",
- *       "Second article text here...",
- *       "Third article text here..."
- *     ]
- *   }'
+ * Note: the request body key is `articles` (an array of article TEXTS), not
+ * `articleIds`. The frontend previously sent the wrong key.
  */
-router.post("/batch-summarize", batchSummarizeArticles);
+router.post("/batch-summarize", protect, aiLimiter, batchSummarizeArticles);
 
 /**
  * POST /api/ai/quick-analyze
- * Quick analysis of article relevance (does NOT perform full summarization)
- * Use this to quickly determine if an article is relevant before full processing
+ * Quick relevance analysis of an article preview (50-300 chars).
  *
  * Request Body:
  * {
- *   "articlePreview": "string (50-300 chars - first paragraph of article)"
+ *   "articlePreview": "string (50-300 chars)"
  * }
- *
- * Response:
- * {
- *   "success": true,
- *   "data": {
- *     "isRelevant": boolean,
- *     "primaryTopic": "Polity|Economy|Defense|Science|International|Other",
- *     "confidence": 0-100,
- *     "reason": "string"
- *   }
- * }
- *
- * Example cURL:
- * curl -X POST http://localhost:5000/api/ai/quick-analyze \
- *   -H "Content-Type: application/json" \
- *   -d '{
- *     "articlePreview": "The Ministry of Defense announced new defense procurement policies today. The announcement focuses on modernization and indigenous equipment development."
- *   }'
- *
- * Use Cases:
- * - Pre-filter articles before full processing
- * - Categorize content quickly
- * - Build relevance scoring system
  */
-router.post("/quick-analyze", quickAnalyzeArticle);
+router.post("/quick-analyze", protect, aiLimiter, quickAnalyzeArticle);
 
 /**
  * GET /api/ai/health
- * Check AI service health and capabilities
- *
- * Response:
- * {
- *   "success": true,
- *   "data": {
- *     "status": "AI service available",
- *     "apiKeyConfigured": true,
- *     "service": "OpenAI GPT-4 Turbo",
- *     "capabilities": [...]
- *   }
- * }
- *
- * Example cURL:
- * curl http://localhost:5000/api/ai/health
+ * Reports whether the AI key is configured. This is a configuration check, not
+ * a live probe - it does not call OpenAI.
  */
 router.get("/health", checkAIServiceHealth);
 
