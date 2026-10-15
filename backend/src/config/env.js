@@ -27,13 +27,17 @@ export const config = {
   JWT_SECRET: getEnv("JWT_SECRET", "default_secret_change_in_production"),
   JWT_EXPIRE: getEnv("JWT_EXPIRE", "7d"),
 
-  // OpenAI
-  OPENAI_API_KEY: getEnv("OPENAI_API_KEY", ""),
-  OPENAI_MODEL: getEnv("OPENAI_MODEL", "gpt-4-turbo"),
+  // AI providers. These are the only providers any code path calls, via
+  // generateStructured (primary + fallback). OPENAI_* used to sit here and is
+  // intentionally gone: the OpenAI request bodies it fed were dead code.
   GEMINI_API_KEY: getEnv("GEMINI_API_KEY", ""),
-  GEMINI_MODEL: getEnv("GEMINI_MODEL", "gemini-2.0-flash"),
+  // Model IDs verified against the live APIs on 2026-10-05: both return 200
+  // with these keys. Older defaults (gemini-2.0-flash, llama-3.3-70b-versatile)
+  // are retired and answer 404, which silently forces every AI call onto the
+  // fallback provider.
+  GEMINI_MODEL: getEnv("GEMINI_MODEL", "gemini-3.8-flash"),
   GROQ_API_KEY: getEnv("GROQ_API_KEY", ""),
-  GROQ_MODEL: getEnv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+  GROQ_MODEL: getEnv("GROQ_MODEL", "openai/gpt-oss-120b"),
   AI_PROVIDER: getEnv("AI_PROVIDER", "gemini"),
 
   // CORS
@@ -41,8 +45,6 @@ export const config = {
   // server port declared in frontend/vite.config.js.
   CORS_ORIGIN: getEnv("CORS_ORIGIN", "http://localhost:3000"),
 
-  // News API
-  NEWS_API_KEY: getEnv("NEWS_API_KEY", ""),
   // Detailed summaries
   DETAILED_TOP_N: parseInt(getEnv("DETAILED_TOP_N", "30"), 10),
   MIN_TEXT_CHARS: parseInt(getEnv("MIN_TEXT_CHARS", "800"), 10),
@@ -54,16 +56,18 @@ export const config = {
   // Derived flags
   isDevelopment: getEnv("NODE_ENV", "development") === "development",
   isProduction: getEnv("NODE_ENV", "development") === "production",
+  isTest: getEnv("NODE_ENV", "development") === "test",
+  // Ingestion scheduler
+  INGEST_INTERVAL_MINUTES: parseInt(getEnv("INGEST_INTERVAL_MINUTES", "15"), 10),
 };
 
 // Validate critical env vars in production
 if (config.isProduction) {
-  if (!process.env.OPENAI_API_KEY) {
-    console.warn("⚠️ Warning: OPENAI_API_KEY not set in production");
-  }
-  if (!process.env.NEWS_API_KEY) {
-    console.warn("⚠️ Warning: NEWS_API_KEY not set in production");
-  }
+  // OPENAI_API_KEY / NEWS_API_KEY are intentionally NOT checked here. No code
+  // path calls OpenAI or NewsAPI any more (see generateStructured for the live
+  // Gemini -> Groq chain, and rssFetcher for ingestion), so warning about them
+  // would imply a requirement that does not exist. The AI key check lives in
+  // server.js so it reports once, with the rest of the boot output.
 
   const jwtSecret = config.JWT_SECRET;
   const isPlaceholderSecret =

@@ -6,6 +6,8 @@ import "./config/dotenv.js";
 import app from "./app.js";
 import { connectDB, disconnectDB } from "./config/database.js";
 import { config } from "./config/env.js";
+import News from "./models/News.js";
+import { startScheduler, stopScheduler } from "./services/scheduler.js";
 
 // Validate environment variables
 console.log("🔧 Loading configuration...");
@@ -27,8 +29,13 @@ let server;
 const start = async () => {
   try {
     await connectDB();
+    // Build the declared indexes before serving. /news/search uses a $text
+    // query, which fails with "text index required" until the index exists.
+    // autoIndex runs in the background, so without this the first searches
+    // after a restart (or any schema change) can 500.
+    await News.init();
   } catch (error) {
-    console.error("❌ Failed to connect to database:", error.message);
+    console.error("❌ Failed to start server:", error.message);
     process.exit(1);
   }
 
@@ -37,6 +44,10 @@ const start = async () => {
     console.log(`🚀 API available at http://localhost:${config.PORT}/api`);
     console.log(`📊 Health check at http://localhost:${config.PORT}/health\n`);
   });
+
+  // Start ingesting only after the DB is confirmed reachable, so the first run
+  // cannot fail against a database that has not finished connecting.
+  startScheduler();
 };
 
 start();
@@ -56,6 +67,9 @@ const shutdown = (signal) => {
 
   const done = async () => {
     clearTimeout(forceExit);
+    // Stop scheduling new ingest runs before closing the DB, so a run cannot
+    // start against a connection that is being torn down.
+    stopScheduler();
     await disconnectDB();
     console.log("✅ Shutdown complete");
     process.exit(0);

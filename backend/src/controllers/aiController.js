@@ -71,14 +71,6 @@ export const summarizeNewsArticle = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     // Handle specific error types
-    if (error.isNotRelevant) {
-      return res.status(400).json({
-        success: false,
-        statusCode: 400,
-        message: error.message,
-      });
-    }
-
     if (error.message.includes("authentication failed")) {
       return res.status(401).json({
         success: false,
@@ -186,9 +178,9 @@ export const batchSummarizeArticles = asyncHandler(async (req, res) => {
 });
 
 /**
- * Quick analyze article relevance
+ * Quick analyze article newsworthiness
  * POST /api/ai/quick-analyze
- * Useful for checking if content is UPSC/CDS relevant before full processing
+ * Useful for a quick topic and confidence check before full processing
  */
 export const quickAnalyzeArticle = asyncHandler(async (req, res) => {
   const { articlePreview } = req.body;
@@ -269,8 +261,7 @@ export const checkAIServiceHealth = asyncHandler(async (req, res) => {
       note: "Configuration check only. Does not verify keys against providers.",
       capabilities: [
         "Article summarization",
-        "UPSC/CDS relevance filtering",
-        "Exam-oriented MCQ generation",
+        "Topic and category tagging",
         "Batch processing",
       ],
     },

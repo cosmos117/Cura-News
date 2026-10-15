@@ -1,29 +1,43 @@
 /**
  * AI Summarization Service
- * Converts raw news articles into structured, UPSC/CDS-relevant content
- * Uses OpenAI API with structured JSON output
+ * Converts raw news articles from various sources into structured summaries
+ * Uses Gemini (primary) / Groq (fallback) with structured JSON output
  */
 
 import axios from "axios";
 import { config } from "../config/env.js";
 
 const env = config;
+const AI_RATE_LIMIT_COOLDOWN_MS = 60_000;
+let aiRateLimitedUntil = 0;
 
 /**
- * System prompt - Instructs OpenAI to focus on UPSC/CDS relevant content
+ * System prompt - Instructs the AI to summarize news clearly for general readers
  */
-const SYSTEM_PROMPT = `You are an expert news analyst specializing in Indian Civil Services (CDS/UPSC) exam preparation. 
+const SYSTEM_PROMPT = `You are an expert news analyst and summarizer.
 
-Your task is to process news articles and extract UPSC-relevant information while:
-1. Filtering out entertainment, gossip, and irrelevant content
-2. Focusing on Polity, Economy, Defense, Science, and International relations
-3. Creating concise, factual summaries suitable for exam preparation
-4. Generating exam-oriented multiple-choice questions
-5. Identifying key topics and subtopics
+Your task is to process news articles from various sources and produce clear, neutral summaries for general readers while:
+1. Covering stories from any section - politics, business, sports, technology, world, entertainment, and more
+2. Creating concise, factual summaries in plain language
+3. Highlighting key facts, figures, people, and context
+4. Identifying key topics and subtopics
 
-IMPORTANT: Return ONLY valid JSON, no other text. Do not include markdown formatting.
-If the article is not relevant to UPSC/CDS exams, return:
-{"error": "Article not relevant to UPSC/CDS exam preparation"}`;
+IMPORTANT: Return ONLY valid JSON, no other text. Do not include markdown formatting.`;
+
+const RESPONSE_SCHEMA = `
+Return exactly one JSON object with this shape:
+{
+  "headline": "10-200 character string",
+  "gist": "one factual sentence of no more than 25 words",
+  "summary": "2-3 factual sentences, 50-1000 characters",
+  "keyFacts": ["3-5 short facts that add information not present in headline, gist, or summary"],
+  "tags": ["1-3 values chosen only from Polity, Economy, Defense, Science, International"],
+  "category": "one of Politics, Business, Sports, Tech, World, Entertainment, Other",
+  "subtopics": ["0-5 strings"]
+}
+Do not repeat the headline or summary in keyFacts. Never use labels such as "Source: ...".
+Do not omit required fields, use empty arrays for optional keyFacts and subtopics only, and do not
+return markdown, explanations, or any fields outside this object.`;
 
 /**
  * Valid tags for news articles
@@ -44,6 +58,26 @@ const VALID_CATEGORIES = [
   "Entertainment",
   "Other",
 ];
+
+const normalizeText = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const overlapsByNgram = (left, right) => {
+  const a = normalizeText(left).split(" ").filter(Boolean);
+  const b = normalizeText(right).split(" ").filter(Boolean);
+  if (a.length < 3 || b.length < 3) return false;
+  const grams = new Set();
+  for (let i = 0; i <= b.length - 3; i += 1) grams.add(b.slice(i, i + 3).join(" "));
+  let matches = 0;
+  for (let i = 0; i <= a.length - 3; i += 1) {
+    if (grams.has(a.slice(i, i + 3).join(" "))) matches += 1;
+  }
+  return matches >= 2;
+};
 
 /**
  * Validate the AI response
@@ -72,6 +106,14 @@ function validateResponse(data) {
     errors.push("Headline must be 10-200 characters");
   }
 
+  if (
+    !data.gist ||
+    typeof data.gist !== "string" ||
+    data.gist.trim().split(/\s+/).length > 25
+  ) {
+    errors.push("Gist must be one sentence of no more than 25 words");
+  }
+
   // Validate summary
   if (
     !data.summary ||
@@ -82,19 +124,25 @@ function validateResponse(data) {
     errors.push("Summary must be 50-1000 characters");
   }
 
-  // Validate bulletPoints
-  if (
-    !Array.isArray(data.bulletPoints) ||
-    data.bulletPoints.length < 3 ||
-    data.bulletPoints.length > 10
-  ) {
-    errors.push("Must have 3-10 bullet points");
+  if (data.keyFacts !== undefined) {
+    if (!Array.isArray(data.keyFacts) || data.keyFacts.length > 5) {
+      errors.push("Key facts must contain 0-5 items");
+    } else if (data.keyFacts.some((fact) => typeof fact !== "string" || !fact.trim())) {
+      errors.push("Key facts must be non-empty strings");
+    } else {
+      const facts = data.keyFacts.filter(
+        (fact) =>
+          !/^source\s*:/i.test(fact.trim()) &&
+          !normalizeText(data.headline).includes(normalizeText(fact)) &&
+          !normalizeText(data.summary).includes(normalizeText(fact)) &&
+          !overlapsByNgram(fact, data.summary),
+      );
+      data.keyFacts = facts;
+    }
   } else {
-    data.bulletPoints.forEach((point, index) => {
-      if (typeof point !== "string" || point.length === 0) {
-        errors.push(`Bullet point ${index + 1} is invalid`);
-      }
-    });
+    data.keyFacts = Array.isArray(data.bulletPoints)
+      ? data.bulletPoints.slice(0, 5)
+      : [];
   }
 
   // Validate tags
@@ -138,34 +186,6 @@ function validateResponse(data) {
     data.subtopics = [];
   }
 
-  // Validate quiz (optional, 0-5 questions)
-  if (data.quiz) {
-    if (!Array.isArray(data.quiz) || data.quiz.length > 5) {
-      errors.push("Quiz must have 0-5 questions");
-    } else {
-      data.quiz.forEach((question, index) => {
-        if (!question.question || typeof question.question !== "string") {
-          errors.push(`Quiz question ${index + 1}: question is required`);
-        }
-        if (!Array.isArray(question.options) || question.options.length !== 4) {
-          errors.push(
-            `Quiz question ${index + 1}: must have exactly 4 options`,
-          );
-        }
-        if (
-          !question.answer ||
-          !["A", "B", "C", "D"].includes(question.answer)
-        ) {
-          errors.push(
-            `Quiz question ${index + 1}: answer must be A, B, C, or D`,
-          );
-        }
-      });
-    }
-  } else {
-    data.quiz = [];
-  }
-
   return {
     isValid: errors.length === 0,
     errors,
@@ -181,6 +201,21 @@ export async function generateStructured({
   maxTokens = 1800,
   temperature = 0.2,
 }) {
+  if (Date.now() < aiRateLimitedUntil) {
+    const error = new Error(
+      "AI providers are rate-limited; using the rule-based fallback",
+    );
+    error.statusCode = 429;
+    throw error;
+  }
+
+  const isRateLimitError = (error) =>
+    error?.response?.status === 429 || error?.status === 429;
+
+  const markRateLimited = () => {
+    aiRateLimitedUntil = Date.now() + AI_RATE_LIMIT_COOLDOWN_MS;
+  };
+
   const callGroq = async () => {
     if (!env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is not configured");
     const response = await axios.post(
@@ -230,12 +265,21 @@ export async function generateStructured({
   try {
     content = await primary();
   } catch (primaryError) {
+    if (isRateLimitError(primaryError)) markRateLimited();
     try {
       content = await fallback();
     } catch (fallbackError) {
-      throw new Error(
+      if (isRateLimitError(fallbackError)) markRateLimited();
+      const error = new Error(
         `AI providers failed: primary=${primaryError.message}; fallback=${fallbackError.message}`,
       );
+      if (
+        isRateLimitError(primaryError) ||
+        isRateLimitError(fallbackError)
+      ) {
+        error.statusCode = 429;
+      }
+      throw error;
     }
   }
 
@@ -248,136 +292,32 @@ export async function generateStructured({
 }
 
 /**
- * Call OpenAI API with retry logic
+ * Structured summarization via the configured provider chain.
+ *
+ * The name is historical. This no longer calls OpenAI directly: it delegates to
+ * generateStructured (Gemini primary, Groq fallback). An earlier edit made this
+ * a one-line delegation but left the entire OpenAI request body below the
+ * `return` in place, where it was unreachable - and still referenced the
+ * undefined `apiKey`, so it would have thrown had it ever been reached.
+ *
  * @param {string} userMessage - User's article text
- * @param {number} retries - Number of retries remaining
  * @returns {Promise<object>} Parsed JSON response
  */
-async function callOpenAIAPI(userMessage, retries = 3) {
+async function callOpenAIAPI(userMessage) {
   return generateStructured({
     systemPrompt: SYSTEM_PROMPT,
-    userPrompt: `Please analyze this news article and return the existing CURA JSON schema:
+    userPrompt: `Please analyze this news article and return the CURA JSON schema.
+${RESPONSE_SCHEMA}
+
 ${userMessage}`,
     maxTokens: 1500,
-    temperature: 0.7,
+    temperature: 0.2,
   });
-
-  const requestBody = {
-    model: env.OPENAI_MODEL,
-    messages: [
-      {
-        role: "system",
-        content: SYSTEM_PROMPT,
-      },
-      {
-        role: "user",
-        content: `Please analyze this news article and provide the output in the following JSON format. Do NOT include markdown formatting or code blocks - return only valid JSON:
-
-{
-  "headline": "Clear, concise headline (10-200 chars)",
-  "summary": "3-line summary (50-1000 chars)",
-  "bulletPoints": ["Point 1", "Point 2", "Point 3"],
-  "tags": ["Polity/Economy/Defense/Science/International"],
-  "category": "Politics/Business/Sports/Tech/World/Entertainment/Other",
-  "subtopics": ["Optional subtopic 1"],
-  "quiz": [
-    {
-      "question": "MCQ question relevant for UPSC/CDS exam",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
-      "answer": "A"
-    }
-  ]
-}
-
-Article to analyze:
-${userMessage}`,
-      },
-    ],
-    temperature: 0.7,
-    max_tokens: 1500,
-  };
-
-  try {
-    const response = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      requestBody,
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 30000,
-      },
-    );
-
-    const content = response.data.choices[0].message.content;
-
-    // Extract JSON from response (remove markdown formatting if present)
-    let jsonStr = content;
-    if (content.includes("```json")) {
-      jsonStr = content.split("```json")[1].split("```")[0];
-    } else if (content.includes("```")) {
-      jsonStr = content.split("```")[1].split("```")[0];
-    }
-
-    const parsedData = JSON.parse(jsonStr.trim());
-    return parsedData;
-  } catch (error) {
-    // Handle specific error types
-    if (error.response?.status === 401) {
-      const authError = new Error(
-        "OpenAI API authentication failed - invalid API key",
-      );
-      authError.statusCode = 401;
-      throw authError;
-    }
-
-    if (error.response?.status === 429) {
-      if (retries > 0) {
-        // Rate limited - wait and retry
-        await new Promise((resolve) =>
-          setTimeout(resolve, 2000 * (4 - retries)),
-        );
-        return callOpenAIAPI(userMessage, retries - 1);
-      }
-      const rateLimitError = new Error(
-        "OpenAI API rate limited - too many requests",
-      );
-      rateLimitError.statusCode = 429;
-      throw rateLimitError;
-    }
-
-    if (error.response?.status === 500) {
-      if (retries > 0) {
-        // Server error - wait and retry
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        return callOpenAIAPI(userMessage, retries - 1);
-      }
-      throw new Error("OpenAI API server error - please try again later");
-    }
-
-    if (error.code === "ECONNABORTED") {
-      if (retries > 0) {
-        return callOpenAIAPI(userMessage, retries - 1);
-      }
-      throw new Error("OpenAI API request timeout - please try again");
-    }
-
-    if (error instanceof SyntaxError) {
-      throw new Error(
-        "Failed to parse OpenAI response - invalid JSON returned",
-      );
-    }
-
-    // Log unexpected errors for debugging
-    console.error("OpenAI API Error:", error.message);
-    throw error;
-  }
 }
 
 /**
  * Main summarization function
- * Converts raw article text to structured UPSC-relevant content
+ * Converts raw article text to structured news summary content
  * @param {string} articleText - Raw article text to summarize
  * @returns {Promise<object>} Structured article data with validation
  */
@@ -415,27 +355,19 @@ export async function summarizeArticle(articleText) {
     // failed News validation for every article.
     return {
       headline: result.headline,
+      gist: result.gist,
       summary: result.summary,
-      bulletPoints: result.bulletPoints,
+      bulletPoints: result.keyFacts || [],
+      keyFacts: result.keyFacts || [],
       tags: result.tags,
       category: result.category,
       subtopics: result.subtopics || [],
-      quiz: result.quiz || [],
       processedAt: new Date(),
     };
   } catch (error) {
     // Enhanced error handling. These must be real Error instances: throwing
     // plain objects left `.name` and `.stack` undefined, which defeated every
     // error-name branch in the global error handler.
-    if (error.isNotRelevant || error.message?.includes("not relevant to UPSC/CDS")) {
-      const notRelevant = new Error(
-        "Article not relevant to UPSC/CDS exam preparation",
-      );
-      notRelevant.statusCode = 400;
-      notRelevant.isNotRelevant = true;
-      throw notRelevant;
-    }
-
     if (error.statusCode && error.statusCode !== 500) {
       throw error;
     }
@@ -509,11 +441,10 @@ export async function quickAnalyze(articlePreview) {
     throw new Error("Article preview must be at least 50 characters");
   }
 
-  const systemPrompt = `You are an expert at quickly determining if a news article is relevant to UPSC/CDS exam preparation.
+  const systemPrompt = `You are an expert at quickly describing a news article for a general news digest.
 
 Respond with JSON:
 {
-  "isRelevant": boolean,
   "primaryTopic": "Polity|Economy|Defense|Science|International|Other",
   "confidence": 0-100,
   "reason": "Brief reason"
@@ -521,42 +452,17 @@ Respond with JSON:
 
 Do NOT include markdown formatting.`;
 
+  // Routed through generateStructured so this honours AI_PROVIDER and the
+  // Gemini -> Groq fallback like every other AI call. It called OpenAI
+  // directly, so it threw "OPENAI_API_KEY not configured" whenever only
+  // Gemini/Groq were set - i.e. in the documented setup.
   try {
-    const apiKey = env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error("OPENAI_API_KEY not configured");
-    }
-
-    const response = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: env.OPENAI_MODEL,
-        messages: [
-          {
-            role: "system",
-            content: systemPrompt,
-          },
-          {
-            role: "user",
-            content: `Quick analyze: ${articlePreview}`,
-          },
-        ],
-        temperature: 0.5,
-        max_tokens: 200,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 10000,
-      },
-    );
-
-    const content = response.data.choices[0].message.content;
-    const result = JSON.parse(content.trim());
-
-    return result;
+    return await generateStructured({
+      systemPrompt,
+      userPrompt: `Quick analyze: ${articlePreview}`,
+      maxTokens: 200,
+      temperature: 0.5,
+    });
   } catch (error) {
     throw new Error(`Quick analysis failed: ${error.message}`);
   }

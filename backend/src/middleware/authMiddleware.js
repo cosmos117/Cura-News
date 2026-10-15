@@ -83,8 +83,8 @@ export const protect = asyncHandler(async (req, res, next) => {
     // preserves `name`, and message matching broke silently whenever the
     // message text changed.
     if (error.name === "TokenExpiredError") {
-    throw new AppError("Token has expired. Please login again.", 401);
-  }
+      throw new AppError("Token has expired. Please login again.", 401);
+    }
     if (JWT_ERROR_NAMES.has(error.name)) {
       throw new AppError("Invalid token. Please login again.", 401);
     }

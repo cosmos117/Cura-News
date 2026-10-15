@@ -73,6 +73,7 @@ export default function Signup() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-card__header">
+          <img src="/logo.svg" alt="" width="56" height="56" className="auth-card__logo" />
           <h1 className="auth-card__title">CURA News</h1>
           <p className="auth-card__subtitle">Create your account</p>
         </div>

@@ -20,7 +20,7 @@ const VALID_TAGS = [
   "International",
 ];
 
-const SYSTEM_PROMPT = `You are a careful news explainer for an Indian news aggregator, useful for students and civil-service aspirants.
+const SYSTEM_PROMPT = `You are a careful news explainer for a general news aggregator read by a broad audience.
 Rules:
 1. Use ONLY facts in the provided text. No outside facts, no speculation, no invented numbers, dates or quotes.
 2. Write in your own words. Never copy sentences from the source.
@@ -59,16 +59,16 @@ const normalizeOutput = (output) => {
     throw new Error("Detailed summary returned an invalid confidence");
   }
   if (
-    !Array.isArray(output.syllabusTags) ||
-    output.syllabusTags.some((tag) => !VALID_TAGS.includes(tag))
+    !Array.isArray(output.topicTags) ||
+    output.topicTags.some((tag) => !VALID_TAGS.includes(tag))
   ) {
-    throw new Error("Detailed summary returned invalid syllabus tags");
+    throw new Error("Detailed summary returned invalid topic tags");
   }
 
   return {
     heading,
     detailedSummary,
-    syllabusTags: output.syllabusTags,
+    topicTags: output.topicTags,
     category: output.category,
     confidence: output.confidence,
   };
@@ -82,7 +82,7 @@ Return JSON:
 {
   "heading": "string, max 120 chars",
   "detailedSummary": "5-14 factual sentences in 3-4 short paragraphs, preferably 8-12 sentences and 100-260 words",
-  "syllabusTags": ["Polity", "Economy", "Defense", "Science", "International"],
+  "topicTags": ["Polity", "Economy", "Defense", "Science", "International"],
   "category": "Politics|Business|Sports|Tech|World|Entertainment|Other",
   "confidence": "high|medium|low"
 }`;
@@ -220,7 +220,9 @@ export async function generateTopDetailedSummaries() {
         detailedConfidence: result.confidence,
         detailedGeneratedAt: new Date(),
         category: result.category,
-        tags: result.syllabusTags.length ? result.syllabusTags : locked.tags,
+        tags: (result.topicTags || result.syllabusTags || []).length
+          ? result.topicTags || result.syllabusTags
+          : locked.tags,
       });
       completed += 1;
     }

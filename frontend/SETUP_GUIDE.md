@@ -11,7 +11,7 @@ frontend/
 │   │   ├── Login.jsx          ✅ Login form with validation
 │   │   ├── Signup.jsx         ✅ Registration form with password check
 │   │   ├── Dashboard.jsx      ✅ News list with search & filter
-│   │   └── Article.jsx        ✅ Article detail with tabs (summary, quiz, notes)
+│   │   └── Article.jsx        ✅ Article detail with tabs (article, summary)
 │   ├── components/            ✅ Ready for reusable components
 │   ├── context/
 │   │   └── AuthContext.jsx    ✅ Complete auth state management
@@ -102,7 +102,7 @@ Visit: http://localhost:3000
 - `Login.jsx`: Email/password login with error handling
 - `Signup.jsx`: Registration with confirmation password
 - `Dashboard.jsx`: Article grid with search & category filter
-- `Article.jsx`: Tabbed interface (content, summary, quiz, notes)
+- `Article.jsx`: Tabbed interface (content, summary)
 
 **Main**
 
@@ -139,16 +139,16 @@ utility classes in the JSX:
 - **Tokens** — colour, spacing, radius, shadow and type-scale custom
   properties on `:root`
 - **Components** — `.card`, `.btn`, `.input`, `.alert`, `.badge`, `.pill`,
-  `.tab`, `.quiz-question`, `.note`, `.article-card`, `.site-header`,
+  `.tab`, `.article-card`, `.site-header`,
   `.auth-card`, `.spinner`, `.empty-state`, `.error-state`
-- **Modifiers** — `--active`, `--error`, `--danger`, `--pass`, `--fail`
+- **Modifiers** — `--active`, `--error`, `--danger`
 - **Hooks** — `--hover`, `--flush`, `--pad`, `--centered`
 
 ### Icons (Lucide React)
 
 - Mail, Lock, User (forms)
 - Newspaper, Search, Tag (articles)
-- Sparkles, HelpCircle, BookOpen (features)
+- Sparkles, BookOpen (features)
 - ArrowLeft, AlertCircle, Loader (navigation & feedback)
 
 ### Responsive Design
@@ -179,8 +179,6 @@ All organized in `services/api.js`:
 - `authAPI`: 4 endpoints
 - `newsAPI`: 7 endpoints
 - `aiAPI`: 3 endpoints
-- `notesAPI`: 6 endpoints
-- `quizAPI`: 3 endpoints
 
 ## 🔄 Development Workflow
 
@@ -236,8 +234,6 @@ function MyComponent() {
 1. Click any article
 2. View full content
 3. Check AI Summary tab
-4. Check Quiz tab
-5. Check Notes tab
 
 ## 🚢 Production Build
 
@@ -300,8 +296,6 @@ npm run build
 ✅ Article search and filtering
 ✅ Tabbed article interface
 ✅ AI summary display
-✅ Quiz functionality interface
-✅ Note management interface
 ✅ Error handling and validation
 ✅ Loading states
 ✅ User profile display

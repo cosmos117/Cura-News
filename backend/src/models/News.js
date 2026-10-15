@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { utcDayRange } from "../utils/date.js";
 import { NEWS_CATEGORIES, DEFAULT_CATEGORY } from "../utils/category.js";
-import { TOPIC_IDS } from "../config/topics.js";
+import { TOPIC_IDS, TOPIC_LABELS } from "../config/topics.js";
 
 const DETAILED_STATUSES = [
   "NONE",
@@ -13,36 +13,8 @@ const DETAILED_STATUSES = [
 const DETAIL_SOURCE_TYPES = ["FULL_TEXT", "SNIPPET_ONLY"];
 
 /**
- * Quiz Schema - Embedded in News
- * Represents a quiz question for an article
- */
-const quizSchema = new mongoose.Schema({
-  question: {
-    type: String,
-    required: [true, "Please provide a quiz question"],
-    trim: true,
-    minlength: [10, "Question must be at least 10 characters"],
-  },
-  options: {
-    type: [String],
-    required: [true, "Please provide quiz options"],
-    validate: {
-      validator: function (options) {
-        return options && options.length === 4;
-      },
-      message: "Quiz must have exactly 4 options",
-    },
-  },
-  answer: {
-    type: String,
-    required: [true, "Please provide the correct answer"],
-    enum: ["A", "B", "C", "D"],
-  },
-});
-
-/**
  * News Schema
- * Represents a news article with AI-generated summaries, metadata, and quizzes
+ * Represents a news article with AI-generated summaries and metadata
  */
 const newsSchema = new mongoose.Schema(
   {
@@ -113,6 +85,20 @@ const newsSchema = new mongoose.Schema(
       minlength: [50, "Summary must be at least 50 characters"],
       maxlength: [1000, "Summary cannot exceed 1000 characters"],
     },
+    gist: {
+      type: String,
+      trim: true,
+      maxlength: [220, "Gist cannot exceed 220 characters"],
+      default: "",
+    },
+    keyFacts: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (facts) => Array.isArray(facts) && facts.length <= 5,
+        message: "Cannot have more than 5 key facts",
+      },
+    },
     detailedSummary: {
       type: String,
       trim: true,
@@ -140,11 +126,10 @@ const newsSchema = new mongoose.Schema(
       type: [String],
       required: [true, "Please provide bullet points"],
       validate: {
-        // An unset array path arrives as [], not undefined.
         validator: function (points) {
-          return Array.isArray(points) && points.length >= 3 && points.length <= 10;
+          return Array.isArray(points) && points.length <= 5;
         },
-        message: "Must have between 3 and 10 bullet points",
+        message: "Must have between 0 and 5 key facts",
       },
     },
     tags: {
@@ -155,29 +140,6 @@ const newsSchema = new mongoose.Schema(
         message:
           "Tags must be one of: Polity, Economy, Defense, Science, International",
       },
-      topic: {
-        type: String,
-        enum: TOPIC_IDS,
-        index: true,
-        default: null,
-      },
-      secondaryTopics: {
-        type: [String],
-        enum: TOPIC_IDS,
-        default: [],
-        validate: {
-          validator: (topics) => topics.length <= 2,
-          message: "Cannot have more than 2 secondary topics",
-        },
-      },
-      topicSource: {
-        type: String,
-        enum: ["SECTION", "KEYWORD", "AI", "MANUAL"],
-      },
-      topicConfidence: {
-        type: String,
-        enum: ["high", "medium", "low"],
-      },
       index: true, // Index for fast tag queries
       validate: {
         validator: function (tags) {
@@ -187,12 +149,50 @@ const newsSchema = new mongoose.Schema(
       },
     },
     /**
+     * Primary topic classification.
+     *
+     * These four fields MUST be declared at the top level of the schema, not
+     * nested inside the `tags` definition above. `tags` is `type: [String]`, so
+     * Mongoose reads that whole object literal as the array's type definition
+     * and silently discards any sibling keys. With the fields nested there,
+     * `topic` was never a real path on the model: every write dropped it and
+     * every `topic` facet query counted null, which is why the dashboard's
+     * topic cards stayed at 0 no matter how many articles were ingested.
+     */
+    topic: {
+      type: String,
+      // `null` is an explicit enum member: "classified but unmatched". Mongoose
+      // runs enum validation against the default value, so leaving it out makes
+      // every article that has not been classified fail validation outright
+      // instead of storing as unclassified.
+      enum: [...TOPIC_IDS, null],
+      index: true,
+      default: null,
+    },
+    secondaryTopics: {
+      type: [String],
+      enum: TOPIC_IDS,
+      default: [],
+      validate: {
+        validator: (topics) => topics.length <= 2,
+        message: "Cannot have more than 2 secondary topics",
+      },
+    },
+    topicSource: {
+      type: String,
+      enum: ["SECTION", "KEYWORD", "AI", "MANUAL"],
+    },
+    topicConfidence: {
+      type: String,
+      enum: ["high", "medium", "low"],
+    },
+    /**
      * Broad news category, used for the topic cards and category chip bar.
      *
-     * Deliberately separate from `tags`, which is the UPSC syllabus view
+     * Deliberately separate from `tags`, which is the general topic view
      * (Polity/Economy/Defense/Science/International). An article can be
      * category "Tech" and tagged "Science" at the same time, and collapsing
-     * the two vocabularies would break the syllabus tagging.
+     * the two vocabularies would break the topic tagging.
      *
      * Defaults to "Other" rather than being required so that pre-existing
      * documents and manual POST /news calls without a category still store.
@@ -213,18 +213,6 @@ const newsSchema = new mongoose.Schema(
           return !subtopics || subtopics.length <= 5;
         },
         message: "Cannot have more than 5 subtopics",
-      },
-    },
-    quiz: {
-      type: [quizSchema],
-      validate: {
-        // Quiz is optional. Mongoose passes an empty ARRAY (not undefined) to
-        // validators for unset array paths, so a naive `!quiz` check always
-        // failed and made it impossible to store any article without a quiz.
-        validator: function (quiz) {
-          return !quiz || quiz.length === 0 || (quiz.length >= 3 && quiz.length <= 5);
-        },
-        message: "Must have between 3 and 5 quiz questions",
       },
     },
     url: {
@@ -273,18 +261,15 @@ newsSchema.index({ date: -1, detailedStatus: 1 });
 newsSchema.index({ headline: "text", summary: "text" });
 
 /**
- * Instance method: Get news with safe quiz (hides answers)
- * @returns {Object} - News object with quiz answers hidden
+ * Instance method: Get news as a plain public object
+ * @returns {Object} - News object
  */
 newsSchema.methods.getPublicNews = function () {
-  const news = this.toObject();
-  if (news.quiz) {
-    news.quiz = news.quiz.map((q) => ({
-      question: q.question,
-      options: q.options,
-    }));
-  }
-  return news;
+  const data = this.toObject();
+  return {
+    ...data,
+    topicLabel: TOPIC_LABELS[data.topic] || data.category || "Other",
+  };
 };
 
 /**

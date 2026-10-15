@@ -42,6 +42,15 @@ import {
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+/**
+ * How often the dashboard re-polls for articles.
+ *
+ * The backend scheduler ingests on its own interval, but an already-open page
+ * would otherwise keep showing whatever it loaded on mount - which is exactly
+ * how a stale "0 articles" dashboard survives a successful ingest.
+ */
+const REFRESH_INTERVAL_MS = 60 * 1000;
+
 /** Icon per category, for the topic cards. */
 const CATEGORY_ICONS = {
   "Politics & Governance": Landmark,
@@ -67,7 +76,10 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategories, setSelectedCategories] = useState([]);
+  const [selectedCategories, setSelectedCategories] = useState(() => {
+    const category = new URLSearchParams(window.location.search).get("category");
+    return category ? [category] : [];
+  });
   const [selectedSources, setSelectedSources] = useState([]);
   const [error, setError] = useState(null);
   const [viewMode, setViewMode] = useState("grouped");
@@ -90,9 +102,14 @@ export default function Dashboard() {
    * search + category + source + tags combine as an AND. Filtering a
    * client-side page instead silently ignores matches beyond the page limit.
    */
-const fetchArticles = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+const fetchArticles = useCallback(async ({ silent = false } = {}) => {
+    // A silent refresh (the periodic poll) leaves existing content on screen.
+    // Clearing `loading` here would blank the whole dashboard every minute and
+    // make it look like the data was being lost and re-fetched.
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const params = { limit: 50, skip: 0 };
       if (searchTerm) params.search = searchTerm;
@@ -103,10 +120,13 @@ const fetchArticles = useCallback(async () => {
       setArticles(response.data.data || []);
       setTotal(response.data.pagination?.total ?? 0);
       setFacets({ ...emptyFacets, ...response.data.facets });
+      // Only surface errors from a foreground load; a failed background poll
+      // should not replace a working list with an error banner.
+      if (!silent) setError(null);
     } catch (err) {
-      setError(getErrorMessage(err, "Failed to fetch articles"));
+      if (!silent) setError(getErrorMessage(err, "Failed to fetch articles"));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [searchTerm, selectedCategories, selectedSources]);
 
@@ -117,6 +137,55 @@ const fetchArticles = useCallback(async () => {
     }
     fetchArticles();
   }, [isAuthenticated, navigate, fetchArticles]);
+
+  // Periodically re-poll so articles ingested by the backend scheduler appear
+  // without a manual reload. Paused while the tab is hidden: a background tab
+  // polling every minute is pure waste, and this also means returning to the tab
+  // always triggers an immediate catch-up refresh.
+  useEffect(() => {
+    if (!isAuthenticated) return undefined;
+
+    let refreshTimer = null;
+
+    const poll = () => {
+      fetchArticles({ silent: true });
+      refreshTimer = setTimeout(poll, REFRESH_INTERVAL_MS);
+    };
+
+    // Only schedules the next poll. The initial load is already handled by the
+    // effect above, so polling here must not fire an immediate duplicate
+    // request on mount.
+    const startPolling = () => {
+      if (refreshTimer === null) {
+        refreshTimer = setTimeout(poll, REFRESH_INTERVAL_MS);
+      }
+    };
+
+    const stopPolling = () => {
+      if (refreshTimer !== null) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        // Catch up immediately after the tab becomes visible again.
+        fetchArticles({ silent: true });
+        startPolling();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    if (!document.hidden) startPolling();
+
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [isAuthenticated, fetchArticles]);
 
   const handleLogout = async () => {
     await logout();
@@ -170,7 +239,7 @@ const fetchArticles = useCallback(async () => {
         <div className="container site-header__inner">
           <div className="brand">
             <div className="brand__mark">
-              <Newspaper className="icon icon--lg" />
+              <img src="/logo.svg" alt="" width="40" height="40" />
             </div>
             <div>
               <h1 className="brand__name">CURA News</h1>

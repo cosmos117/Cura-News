@@ -8,8 +8,7 @@ import testRoutes from "./routes/testRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import newsRoutes from "./routes/newsRoutes.js";
 import aiRoutes from "./routes/aiRoutes.js";
-import notesRoutes from "./routes/notesRoutes.js";
-import quizRoutes from "./routes/quizRoutes.js";
+//
 
 const app = express();
 
@@ -52,12 +51,6 @@ app.use("/api/news", newsRoutes);
 
 // AI summarization routes
 app.use("/api/ai", aiRoutes);
-
-// Notes routes
-app.use("/api/notes", notesRoutes);
-
-// Quiz routes
-app.use("/api/quiz", quizRoutes);
 
 // API version and info
 app.get("/api/info", (req, res) => {

@@ -2,17 +2,18 @@
  * News Processor Service
  * Orchestrates the complete news processing pipeline:
  * 1. Fetch articles from RSS feeds
- * 2. Filter by relevance (AI or keywords)
- * 3. Create a rule-based short summary
- * 4. Store in MongoDB
- * 5. Handle failures and deduplication
+ * 2. Create a rule-based short summary
+ * 3. Store in MongoDB
+ * 4. Handle failures and deduplication
  */
 
 import News from "../models/News.js";
 import { fetchRssArticles } from "./rssFetcher.js";
 import { resolveCategory } from "../utils/category.js";
+import { utcDayRange } from "../utils/date.js";
 import { generateTopDetailedSummaries } from "./detailedSummaryService.js";
 import { classifyArticles } from "./topicClassifier.js";
+import * as aiService from "./aiService.js";
 
 /**
  * Keys that aiService.summarizeArticle adds for its own bookkeeping. These must
@@ -103,9 +104,7 @@ class NewsProcessor {
 
   /**
    * Main pipeline execution
-   * @param {Object} options - Pipeline options
-   * @param {boolean} [options.skipAIFilter] - Use the keyword filter instead
-   *   of spending an AI call per candidate article.
+   * @param {Object} options - Pipeline options (reserved for future use)
    * @returns {Promise<Object>} - Pipeline report
    */
   async processDailyNews(options = {}) {
@@ -128,6 +127,11 @@ class NewsProcessor {
 
       try {
         this.logger.info("🚀 Starting news processing pipeline");
+
+        // The dashboard is a current-day view. Clean the previous snapshot
+        // before every run, including runs where every feed is empty or
+        // contains only URLs already seen.
+        await this._cleanupOldNews();
 
         // Step 1: Fetch articles
         this.logger.info("📡 Step 1: Fetching articles");
@@ -157,26 +161,10 @@ class NewsProcessor {
           `✅ ${uniqueArticles.length} unique articles (${this.logger.stats.duplicates} duplicates skipped)`,
         );
 
-        // Step 3: Filter by relevance
-        this.logger.info("🎯 Step 3: Filtering by relevance");
-        const relevantArticles = await this._filterByRelevance(
-          uniqueArticles,
-          options,
-        );
-        this.logger.stats.filtered = relevantArticles.length;
-
-        if (relevantArticles.length === 0) {
-          this.logger.warn("⚠️  No relevant articles after filtering");
-          this.logger.stats.endTime = Date.now();
-          return this.logger.getReport();
-        }
-
-        this.logger.info(`✅ ${relevantArticles.length} relevant articles`);
-
-        // Step 4: Summarize and enrich with AI
-        this.logger.info("🤖 Step 4: AI summarization and enrichment");
+        // Step 3: Summarize and enrich with AI
+        this.logger.info("🤖 Step 3: AI summarization and enrichment");
         const summarizedArticles =
-          await this._summarizeArticles(relevantArticles);
+          await this._summarizeArticles(uniqueArticles);
         this.logger.stats.summarized = summarizedArticles.length;
 
         if (summarizedArticles.length === 0) {
@@ -187,9 +175,11 @@ class NewsProcessor {
 
         this.logger.info(`✅ ${summarizedArticles.length} articles summarized`);
 
-        // Step 5: Store in database
-        this.logger.info("💾 Step 5: Storing in database");
+        // Step 4: Store in database
+        this.logger.info("💾 Step 4: Storing in database");
         await this._storeArticles(summarizedArticles);
+        // Clean up old news articles, keeping only current day
+        await this._cleanupOldNews();
         generateTopDetailedSummaries()
           .then((result) =>
             this.logger.info("Tier 2 detailed summaries processed", result),
@@ -264,94 +254,58 @@ class NewsProcessor {
   }
 
   /**
-   * Step 3: Filter by relevance using AI or keywords
-   */
-  async _filterByRelevance(articles, options = {}) {
-    this.logger.info("⚡ RSS ingestion accepts feed items without paid AI filtering");
-    return articles;
-  }
-
-  /**
-   * Keyword-based filtering (fallback)
-   */
-  _keywordFilter(article) {
-    const text = `${article.headline} ${article.summary}`.toLowerCase();
-
-    const upscKeywords = [
-      "upsc",
-      "budget",
-      "cabinet",
-      "minister",
-      "parliament",
-      "lok sabha",
-      "rajya sabha",
-      "defense",
-      "economy",
-      "international",
-      "science",
-      "polity",
-    ];
-
-    const hasUPSCKeyword = upscKeywords.some((keyword) =>
-      text.includes(keyword),
-    );
-
-    return hasUPSCKeyword;
-  }
-
-  /**
-   * AI-based relevance analysis with retry
-   */
-  async _analyzeRelevance(article, attempt = 1) {
-    try {
-      const preview = `${article.headline}. ${article.summary}`.substring(
-        0,
-        200,
-      );
-      const result = await quickAnalyze(preview);
-      return result;
-    } catch (error) {
-      if (attempt < PIPELINE_CONFIG.RETRY_ATTEMPTS) {
-        this.logger.warn("Retrying relevance analysis", {
-          attempt,
-          headline: article.headline?.substring(0, 30),
-        });
-        await new Promise((resolve) =>
-          setTimeout(resolve, PIPELINE_CONFIG.RETRY_DELAY),
-        );
-        return this._analyzeRelevance(article, attempt + 1);
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Step 4: Summarize articles with AI
+   * Step 3: Summarize articles with AI
    */
   async _summarizeArticles(articles) {
     const summarized = [];
     for (const article of articles) {
-      const sentences = article.summary
-        .split(/(?<=[.!?])\s+/)
-        .map((sentence) => sentence.trim())
-        .filter(Boolean);
-      const shortSummary = sentences.slice(0, 3).join(" ");
-      const usableSummary =
-        shortSummary.length >= 50
-          ? shortSummary
-          : `${article.headline}. Read the original report at ${article.source}.`;
-      const bulletPoints = [
-        article.headline,
-        ...sentences.slice(0, 4),
-        `Source: ${article.source}`,
-      ].slice(0, 5);
-      summarized.push({
-        ...article,
-        summary: usableSummary,
-        bulletPoints,
-        tags: this._deriveTags(`${article.headline} ${article.summary}`),
-        aiCategory: null,
-      });
+      try {
+        // Full AI summarization
+        const aiResult = await this._summarizeWithRetry(
+          `${article.headline}. ${article.summary}${article.content ? `. ${article.content}` : ""}`,
+        );
+
+        summarized.push({
+          ...article,
+          gist: aiResult.gist,
+          summary: aiResult.summary,
+          bulletPoints: aiResult.bulletPoints,
+          keyFacts: aiResult.keyFacts || [],
+          tags: aiResult.tags,
+          subtopics: aiResult.subtopics,
+          aiCategory: aiResult.category,
+        });
+      } catch (error) {
+        // If AI fails, fall back to rule-based summary from RSS description
+        this.logger.warn("AI summarization failed, using fallback", {
+          headline: article.headline?.substring(0, 50),
+          error: error.message,
+        });
+
+        const sentences = article.summary
+          .split(/(?<=[.!?])\s+/)
+          .map((sentence) => sentence.trim())
+          .filter(Boolean);
+        const shortSummary = sentences.slice(0, 3).join(" ");
+        const fallbackSummary =
+          shortSummary.length >= 50
+            ? shortSummary
+            : `${article.headline}. Read the original report at ${article.source}.`;
+        const usableSummary = fallbackSummary.slice(0, 1000);
+        const keyFacts = sentences
+          .filter((sentence) => sentence.toLowerCase() !== article.headline.toLowerCase())
+          .slice(0, 5);
+
+        summarized.push({
+          ...article,
+          gist: (sentences[0] || article.headline).split(/\s+/).slice(0, 25).join(" "),
+          summary: usableSummary,
+          bulletPoints: keyFacts,
+          keyFacts,
+          tags: this._deriveTags(`${article.headline} ${article.summary}`),
+          aiCategory: null,
+        });
+      }
     }
 
     return classifyArticles(summarized);
@@ -377,9 +331,15 @@ class NewsProcessor {
    */
   async _summarizeWithRetry(articleText, attempt = 1) {
     try {
-      const result = await summarizeArticle(articleText);
+      const result = await aiService.summarizeArticle(articleText);
       return result;
     } catch (error) {
+      // A provider-wide 429 will affect every remaining article in this run.
+      // Retrying it only delays the deterministic fallback and keeps the
+      // dashboard empty while hundreds of RSS items are processed.
+      if (error.statusCode === 429 || /\b429\b|rate-limited/i.test(error.message)) {
+        throw error;
+      }
       if (attempt < PIPELINE_CONFIG.RETRY_ATTEMPTS) {
         this.logger.warn("Retrying summarization", {
           attempt,
@@ -395,7 +355,7 @@ class NewsProcessor {
   }
 
   /**
-   * Step 5: Store articles in MongoDB
+   * Step 4: Store articles in MongoDB
    */
   async _storeArticles(articles) {
     for (const article of articles) {
@@ -416,31 +376,33 @@ class NewsProcessor {
         const newsData = {
           source: article.source || "The Hindu",
           headline: article.headline,
+          gist: article.gist || article.headline,
           summary: article.summary,
-          bulletPoints: article.bulletPoints?.length
-            ? article.bulletPoints
-            : [article.summary].filter(Boolean),
+          bulletPoints: article.keyFacts || article.bulletPoints || [],
+          keyFacts: article.keyFacts || article.bulletPoints || [],
           tags: article.tags?.length
             ? article.tags
-            : article.syllabusHints?.length
-              ? article.syllabusHints.slice(0, 3)
-              : ["Polity"],
+            : (article.topicHints ?? article.syllabusHints ?? []).length
+              ? (article.topicHints ?? article.syllabusHints).slice(0, 3)
+              : ["International"],
           section: article.section,
           sourceId: article.sourceId,
           feedId: article.feedId,
           publishedAt: article.publishedAt,
           summaryStatus: "SUMMARIZED",
           summarizedAt: new Date(),
-          modelUsed: "rule-based",
+          modelUsed: article.aiCategory ? "gemini-3.8-flash" : "rule-based",
           category,
           topic: article.topic,
           secondaryTopics: article.secondaryTopics || [],
           topicSource: article.topicSource,
           topicConfidence: article.topicConfidence,
           subtopics: article.subtopics || [],
-          quiz: article.quiz?.length ? article.quiz : undefined,
           url: article.url,
-          date: article.publishedAt || new Date(),
+          // `date` is the ingestion day used by the dashboard's current-day
+          // query. Keep the publisher timestamp separately in `publishedAt`;
+          // RSS feeds commonly retain items published before today.
+          date: new Date(),
           isPublished: true,
         };
 
@@ -464,6 +426,30 @@ class NewsProcessor {
         });
         this.logger.stats.failed++;
       }
+    }
+  }
+
+  /**
+   * Clean up old news articles, keeping only those from the current UTC day.
+   * This ensures the database only retains recent articles and removes stale data.
+   */
+  async _cleanupOldNews() {
+    try {
+      const now = new Date();
+      const { startOfUtcDay } = utcDayRange(now);
+      // Remove articles whose date is outside the current UTC day
+      const result = await News.deleteMany({
+        date: {
+          $lt: startOfUtcDay,
+        },
+      });
+      this.logger.info(`🧹 Cleaned up ${result.deletedCount} old news articles`);
+      return result.deletedCount;
+    } catch (error) {
+      this.logger.error("Failed to clean up old news", {
+        error: error.message,
+      });
+      return 0;
     }
   }
 

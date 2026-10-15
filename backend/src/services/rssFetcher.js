@@ -38,7 +38,7 @@ const normalize = (item, feed) => {
     feedId: feed.feedId,
     section: feed.section,
     feedCategory: feed.defaultCategory,
-    syllabusHints: feed.syllabusHints,
+    topicHints: feed.topicHints ?? feed.syllabusHints ?? [],
     feedPriority: feed.priority,
     url,
     publishedAt: new Date(item.isoDate || item.pubDate || Date.now()),

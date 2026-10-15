@@ -15,8 +15,8 @@ export default function NotFound() {
           We couldn't find that page.
         </p>
 
-        <Link to="/dashboard" className="btn btn-primary">
-          Back to Dashboard
+        <Link to="/" className="btn btn-primary">
+          Back to Home
         </Link>
       </div>
     </div>

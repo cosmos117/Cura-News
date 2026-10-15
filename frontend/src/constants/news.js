@@ -2,7 +2,7 @@
  * Domain constants mirroring the backend enums.
  *
  * `NEWS_CATEGORIES` is the broad topic taxonomy (Politics, Business, ...). It is
- * deliberately separate from `NEWS_TAGS`, which is the UPSC syllabus view
+ * deliberately separate from `NEWS_TAGS`, which is the general topic view
  * (Polity, Economy, Defense, ...). An article can be category "Tech" and tagged
  * "Science" at the same time.
  *

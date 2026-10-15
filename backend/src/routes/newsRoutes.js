@@ -37,7 +37,6 @@ const router = express.Router();
  * - skip: Pagination offset (default: 0)
  *
  * Response: { success, message, pagination: {total,limit,skip,hasMore}, data: [...] }
- * Quiz answers are always stripped from list responses.
  */
 router.get("/today", getTodayNews);
 router.get("/", getTodayNews);
@@ -92,8 +91,7 @@ router.post("/:id/detailed", protect, detailedLimiter, generateDetailedNews);
  * Create a new news article.
  *
  * Protected: previously unauthenticated, which allowed anyone to inject
- * arbitrary articles - including fabricated quiz answer keys - straight into
- * the published feed.
+ * arbitrary articles straight into the published feed.
  *
  * Request Body:
  * {
@@ -102,14 +100,7 @@ router.post("/:id/detailed", protect, detailedLimiter, generateDetailedNews);
  *   "summary": "The government announced the budget with focus on infrastructure.",
  *   "bulletPoints": ["10% increase in education spending", "..."],
  *   "tags": ["Economy", "Polity"],
- *   "subtopics": ["Fiscal Policy"],
- *   "quiz": [
- *     {
- *       "question": "What is the focus of the new budget?",
- *       "options": ["Education", "Defense", "Infrastructure", "All of the above"],
- *       "answer": "D"
- *     }
- *   ]
+ *   "subtopics": ["Fiscal Policy"]
  * }
  */
 router.post("/", protect, createNews);
@@ -118,13 +109,8 @@ router.post("/", protect, createNews);
  * GET /api/news/:id
  * Fetch a single news article by ID
  *
- * Query Parameters:
- * - includeAnswers: NO LONGER SUPPORTED. This flag previously exposed every
- *   correct quiz answer to anonymous callers. Use POST /api/quiz/submit,
- *   which returns per-question feedback after an attempt, instead.
- *
  * Response: { success, message, data: { _id, source, date, headline, summary,
- *   bulletPoints, tags, subtopics, quiz (answers stripped) } }
+ *   bulletPoints, tags, subtopics } }
  */
 router.get("/:id", getNewsByID);
 
