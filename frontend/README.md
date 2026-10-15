@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/logo-lockup.svg" alt="CURA News" width="360" />
+</p>
+
 # CURA News Frontend
 
 A modern React + Vite frontend for the CURA News AI-powered news summarization platform.
@@ -21,7 +25,7 @@ frontend/
 │   │   ├── Login.jsx         # User login page
 │   │   ├── Signup.jsx        # User registration page
 │   │   ├── Dashboard.jsx     # News articles list & search
-│   │   └── Article.jsx       # Article details with summary, quiz, notes
+│   │   └── Article.jsx       # Article details with summary
 │   ├── components/           # Reusable components (can be expanded)
 │   ├── context/
 │   │   └── AuthContext.jsx   # Authentication state management
@@ -105,8 +109,6 @@ npm run preview
 - Tabbed interface (tabs appear only when the data exists):
   - **Article**: subtopics and bullet points
   - **AI Summary**: AI-generated summary (if available)
-  - **Quiz**: interactive quiz with per-question review (authenticated)
-  - **Notes**: create/delete notes, and see other students' notes
 
 ### **Context**
 
@@ -134,8 +136,6 @@ npm run preview
   - `authAPI`: register, login, logout, getCurrentUser
   - `newsAPI`: CRUD operations for articles
   - `aiAPI`: Summarization endpoints
-  - `notesAPI`: Note management
-  - `quizAPI`: Quiz submission & retrieval
 
 ## 🎨 Styling
 
@@ -145,9 +145,9 @@ organised as a design system:
 - **Custom properties** — colour, spacing, radius, shadow and type-scale tokens
   defined once on `:root`, plus responsive overrides in the media queries
 - **Semantic class names** — `.card`, `.btn`, `.input`, `.alert`, `.badge`,
-  `.pill`, `.tab`, `.quiz-question`, `.note`, `.article-card`, `.site-header`,
+  `.pill`, `.tab`, `.article-card`, `.site-header`,
   `.auth-card`. Components reference these, never raw layout utilities
-- **BEM-style modifiers** — `--active`, `--error`, `--danger`, `--correct`
+- **BEM-style modifiers** — `--active`, `--error`, `--danger`
   for state variants (`.tab--active`, `.input--error`)
 - **Responsive** — mobile-first; layout, header and segmented-control label
   rules collapse under `@media (max-width: 768px)`
@@ -197,7 +197,6 @@ Header: Authorization: Bearer <token>
       bulletPoints: ["point one", "point two"],
       tags: ["Polity"],
       subtopics: ["Parliament"],
-      quiz: [],
       url: "https://...",
     },
   ],
@@ -230,7 +229,6 @@ None. Styling ships as plain CSS in `src/index.css`.
      the dashboard searches the loaded page in memory)
    - User profile page
    - Favorites/bookmarks
-   - Note editing (create and delete are implemented)
 
 2. **Optimization**
    - Lazy load page components
@@ -278,11 +276,6 @@ There are no `format` or `lint` scripts yet.
 | GET    | `/auth/me`          | Current user profile |
 | GET    | `/news`             | List articles (`tags`, `limit`, `skip`) |
 | GET    | `/news/:id`         | Get article details  |
-| GET    | `/notes/article/:id` | Notes for one article |
-| POST   | `/notes`            | Create note          |
-| DELETE | `/notes/:id`        | Delete own note      |
-| GET    | `/quiz/:articleId`  | Get quiz (no answers)|
-| POST   | `/quiz/submit`      | Submit quiz answers  |
 
 See the root `README.md` for the full endpoint table and data models.
 

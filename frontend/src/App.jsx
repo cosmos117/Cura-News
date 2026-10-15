@@ -11,6 +11,7 @@ import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
 import Article from "./pages/Article";
 import NotFound from "./pages/NotFound";
+import Landing from "./pages/Landing";
 import "./index.css";
 
 const FullPageSpinner = ({ label = "Loading..." }) => (
@@ -56,16 +57,6 @@ function PublicOnlyRoute({ children }) {
   return isAuthenticated ? <Navigate to="/dashboard" replace /> : children;
 }
 
-function HomeRedirect() {
-  const { isAuthenticated, loading } = useAuth();
-
-  if (loading) {
-    return <FullPageSpinner />;
-  }
-
-  return <Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />;
-}
-
 function AppRoutes() {
   return (
     <Routes>
@@ -103,7 +94,7 @@ function AppRoutes() {
         }
       />
 
-      <Route path="/" element={<HomeRedirect />} />
+      <Route path="/" element={<Landing />} />
       {/* Real 404 instead of silently redirecting a mistyped URL */}
       <Route path="*" element={<NotFound />} />
     </Routes>

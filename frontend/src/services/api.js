@@ -5,8 +5,8 @@ import apiClient from "./apiClient";
  *
  * Only endpoints that actually exist on the backend are declared here.
  * Previously ~half of these pointed at routes that were never implemented
- * (GET /news/:id/summary, PUT|DELETE /news/:id, POST /ai/generate-summary,
- * GET /quiz/:id/results, GET /notes/:id) and silently 404'd at runtime.
+ * (GET /news/:id/summary, PUT|DELETE /news/:id, POST /ai/generate-summary)
+ * and silently 404'd at runtime.
  */
 
 // Auth API calls
@@ -35,7 +35,7 @@ export const newsAPI = {
 };
 
 // AI API calls. All require authentication and are rate limited, because each
-// call bills a real OpenAI request.
+// call bills a real AI request.
 export const aiAPI = {
   summarize: (data) => apiClient.post("/ai/summarize", data),
   // Body key is `articles` (an array of article TEXTS), not `articleIds`.
@@ -44,30 +44,4 @@ export const aiAPI = {
   quickAnalyze: (articlePreview) =>
     apiClient.post("/ai/quick-analyze", { articlePreview }),
   health: () => apiClient.get("/ai/health"),
-};
-
-// Notes API calls
-export const notesAPI = {
-  // The signed-in user's own notes (protected).
-  getAll: (params) => apiClient.get("/notes", { params }),
-  // Public per-article feed. Returns EVERY user's note with only the author
-  // name - never treat this as the current user's notes.
-  getByArticle: (articleId, params) =>
-    apiClient.get(`/notes/article/${articleId}`, { params }),
-  getById: (id) => apiClient.get(`/notes/note/${id}`),
-  create: (data) => apiClient.post("/notes", data),
-  update: (id, data) => apiClient.put(`/notes/${id}`, data),
-  delete: (id) => apiClient.delete(`/notes/${id}`),
-  togglePin: (id) => apiClient.patch(`/notes/${id}/pin`),
-  getStats: () => apiClient.get("/notes/stats/overview"),
-};
-
-// Quiz API calls.
-// There is deliberately no endpoint that returns the answer key: the backend
-// removed GET /quiz/:id/answers and GET /news/:id?includeAnswers=true, both of
-// which leaked every correct answer to anonymous callers.
-export const quizAPI = {
-  getQuiz: (articleId) => apiClient.get(`/quiz/${articleId}`),
-  submitQuiz: (data) => apiClient.post("/quiz/submit", data),
-  getStats: (articleId) => apiClient.get(`/quiz/stats/${articleId}`),
 };

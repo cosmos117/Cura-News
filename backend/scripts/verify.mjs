@@ -50,6 +50,10 @@ async function main() {
   process.env.JWT_SECRET = "test-secret-that-is-definitely-long-enough-32";
   process.env.NODE_ENV = "test";
   process.env.CORS_ORIGIN = "http://localhost:3000";
+  // Pinned explicitly: dotenv does not override already-set vars, so these win
+  // over any local .env and the assertions below stay deterministic.
+  process.env.AI_PROVIDER = "gemini";
+  process.env.GEMINI_MODEL = "gemini-3.8-flash";
 
   const { connectDB, disconnectDB } = await import("../src/config/database.js");
   await connectDB();
@@ -60,7 +64,10 @@ async function main() {
   baseUrl = `http://127.0.0.1:${server.address().port}/api`;
 
   const News = (await import("../src/models/News.js")).default;
-  const Note = (await import("../src/models/Note.js")).default;
+  // Ensure indexes (notably the text index behind /news/search) exist before
+  // any request is made; autoIndex otherwise builds them in the background and
+  // the first $text query 500s.
+  await News.init();
 
   // ---------- seed ----------
   const article = await News.create({
@@ -75,23 +82,6 @@ async function main() {
     ],
     tags: ["Polity", "Economy"],
     subtopics: ["Education Policy"],
-    quiz: [
-      {
-        question: "Which body approved the education policy reform?",
-        options: ["Union Cabinet", "Supreme Court", "Election Commission", "RBI"],
-        answer: "A",
-      },
-      {
-        question: "Which domain received additional funding?",
-        options: ["Defense", "Secondary schools", "Space agency", "Agriculture only"],
-        answer: "B",
-      },
-      {
-        question: "When does the new certification process begin?",
-        options: ["This year", "Next year", "In five years", "Never"],
-        answer: "B",
-      },
-    ],
     url: "https://example.com/education-policy",
     date: new Date(),
     isPublished: true,
@@ -110,19 +100,23 @@ async function main() {
     const { config } = await import("../src/config/env.js");
     assert.equal(config.JWT_SECRET, process.env.JWT_SECRET);
     assert.equal(config.CORS_ORIGIN, "http://localhost:3000");
-    assert.equal(config.OPENAI_MODEL, "gpt-4-turbo");
+    // The providers that actually back AI_PROVIDER. OPENAI_MODEL used to be
+    // asserted here, but no code path calls OpenAI any more.
+    assert.equal(config.AI_PROVIDER, "gemini");
+    assert.equal(config.GEMINI_MODEL, "gemini-3.8-flash");
+    assert.equal(config.OPENAI_MODEL, undefined);
+    assert.equal(config.NEWS_API_KEY, undefined);
   });
 
   // ---------- auth ----------
   let token;
-  let token2;
-  const email = `student-${Date.now()}@example.com`;
+  const email = `reader-${Date.now()}@example.com`;
 
   await check("register returns a usable token", async () => {
     const res = await api("/auth/register", {
       method: "POST",
       body: {
-        name: "Test Student",
+        name: "Test Reader",
         email,
         password: "supersecret1",
         confirmPassword: "supersecret1",
@@ -215,17 +209,11 @@ async function main() {
     assert.equal(none.data.data.length, 0);
   });
 
-  await check("GET /news/:id strips quiz answers", async () => {
+  await check("GET /news/:id returns the article without quiz data", async () => {
     const res = await api(`/news/${articleId}`);
     assert.equal(res.status, 200);
-    assert.equal(res.data.data.quiz[0].answer, undefined);
-    assert.ok(res.data.data.quiz[0].options);
-  });
-
-  await check("GET /news/:id?includeAnswers=true no longer leaks answers", async () => {
-    const res = await api(`/news/${articleId}?includeAnswers=true`);
-    assert.equal(res.status, 200);
-    assert.equal(res.data.data.quiz[0].answer, undefined);
+    assert.equal(res.data.data.quiz, undefined);
+    assert.ok(res.data.data.headline);
   });
 
   await check("GET /news/:id rejects a malformed id", async () => {
@@ -275,174 +263,39 @@ async function main() {
     assert.equal(res.data.data.length, 1);
   });
 
-  // ---------- quiz answer leaks ----------
-  await check("GET /quiz/:id/answers is gone (was public answer leak)", async () => {
-    const res = await api(`/quiz/${articleId}/answers`);
+  // ---------- quiz routes removed ----------
+  await check("GET /quiz/:id is gone (quiz feature removed)", async () => {
+    const res = await api(`/quiz/${articleId}`);
     assert.equal(res.status, 404);
   });
 
-  await check("GET /quiz/:id returns questions without answers", async () => {
-    const res = await api(`/quiz/${articleId}`);
-    assert.equal(res.status, 200);
-    assert.equal(res.data.data.questions[0].answer, undefined);
-  });
-
-  await check("POST /quiz/submit scores and returns per-question review", async () => {
-    const res = await api("/quiz/submit", {
-      method: "POST",
-      token,
-      body: { articleId, answers: ["A", "B", "B"] },
-    });
-    assert.equal(res.status, 200);
-    assert.equal(res.data.data.score, 3);
-    assert.equal(res.data.data.percentage, 100);
-    assert.equal(res.data.data.questions[0].correctAnswer, "A");
-    assert.equal(res.data.data.questions[0].isCorrect, true);
-  });
-
-  await check("POST /quiz/submit validates the answer array", async () => {
+  await check("POST /quiz/submit is gone (quiz feature removed)", async () => {
     const res = await api("/quiz/submit", {
       method: "POST",
       token,
       body: { articleId, answers: ["A"] },
     });
-    assert.equal(res.status, 400);
-    assert.match(res.data.message, /Expected 3 answers/);
+    assert.equal(res.status, 404);
   });
 
-  // ---------- notes: the ReferenceError bugs ----------
-  await check("POST /notes works (was a guaranteed ReferenceError 500)", async () => {
-    const res = await api("/notes", {
-      method: "POST",
-      token,
-      body: {
-        articleId,
-        content: "The cabinet reform focuses on secondary school funding.",
-        tags: ["policy"],
-      },
-    });
-    assert.equal(res.status, 201, JSON.stringify(res.data));
-    assert.ok(res.data.data._id);
-  });
-
-  await check("POST /notes enforces the 10-char minimum", async () => {
-    const res = await api("/notes", {
-      method: "POST",
-      token,
-      body: { articleId, content: "short" },
-    });
-    assert.equal(res.status, 400);
-    assert.match(res.data.message, /at least 10 characters/);
-  });
-
-  await check("POST /notes rejects non-string content", async () => {
-    const res = await api("/notes", {
-      method: "POST",
-      token,
-      body: { articleId, content: 12345 },
-    });
-    assert.equal(res.status, 400);
-    assert.match(res.data.message, /must be a string/);
-  });
-
-  await check("POST /notes returns the author so the UI can group own notes", async () => {
-    const res = await api("/notes", {
-      method: "POST",
-      token,
-      body: { articleId, content: "Second note with enough characters." },
-    });
-    assert.equal(res.status, 201);
-    assert.ok(res.data.data.userId?._id, "userId should be populated");
-    assert.ok(res.data.data.userId?.name);
-    assert.equal(res.data.data.userId.email, undefined, "email must not leak");
-  });
-
-  let myNoteId;
-  await check("GET /notes returns only the caller's notes", async () => {
+  // ---------- notes feature removed ----------
+  await check("GET /notes is gone (notes feature removed)", async () => {
     const res = await api("/notes", { token });
-    assert.equal(res.status, 200);
-    assert.ok(res.data.data.length >= 2);
-    myNoteId = res.data.data[0]._id;
+    assert.equal(res.status, 404);
   });
 
-  await check("GET /notes/article/:id is paginated and email-free", async () => {
-    const res = await api(`/notes/article/${articleId}`);
-    assert.equal(res.status, 200);
-    assert.ok(res.data.pagination, "must include pagination");
-    assert.equal(res.data.data[0].userId.email, undefined);
-  });
-
-  // ---------- IDOR ----------
-  await check("second user cannot read another user's note (IDOR fix)", async () => {
-    const other = await api("/auth/register", {
+  await check("POST /notes is gone (notes feature removed)", async () => {
+    const res = await api("/notes", {
       method: "POST",
-      body: {
-        name: "Other Student",
-        email: `other-${Date.now()}@example.com`,
-        password: "supersecret1",
-        confirmPassword: "supersecret1",
-      },
-    });
-    token2 = other.data.token;
-
-    const res = await api(`/notes/note/${myNoteId}`, { token: token2 });
-    assert.equal(res.status, 403, `expected 403, got ${res.status}`);
-  });
-
-  await check("second user cannot update another user's note", async () => {
-    const res = await api(`/notes/${myNoteId}`, {
-      method: "PUT",
-      token: token2,
-      body: { content: "hijacked content that is long enough" },
-    });
-    assert.equal(res.status, 403);
-  });
-
-  await check("second user cannot delete another user's note", async () => {
-    const res = await api(`/notes/${myNoteId}`, { method: "DELETE", token: token2 });
-    assert.equal(res.status, 403);
-  });
-
-  await check("owner can update their own note", async () => {
-    const res = await api(`/notes/${myNoteId}`, {
-      method: "PUT",
       token,
-      body: { content: "Updated note content that is long enough." },
+      body: { articleId, content: "Notes no longer exist in this build." },
     });
-    assert.equal(res.status, 200);
-    assert.match(res.data.data.content, /^Updated/);
+    assert.equal(res.status, 404);
   });
 
-  await check("PUT /notes rejects a non-array tags value (was ReferenceError)", async () => {
-    const res = await api(`/notes/${myNoteId}`, {
-      method: "PUT",
-      token,
-      body: { tags: "not-an-array" },
-    });
-    assert.equal(res.status, 400);
-    assert.match(res.data.message, /array/i);
-  });
-
-  await check("PUT /notes rejects a non-boolean isPinned", async () => {
-    const res = await api(`/notes/${myNoteId}`, {
-      method: "PUT",
-      token,
-      body: { isPinned: "false" },
-    });
-    assert.equal(res.status, 400);
-    assert.match(res.data.message, /boolean/i);
-  });
-
-  await check("GET /notes/stats/overview works (was ReferenceError 500)", async () => {
-    const res = await api("/notes/stats/overview", { token });
-    assert.equal(res.status, 200, JSON.stringify(res.data));
-    assert.ok(typeof res.data.data.totalNotes === "number");
-  });
-
-  await check("PATCH /notes/:id/pin toggles", async () => {
-    const res = await api(`/notes/${myNoteId}/pin`, { method: "PATCH", token });
-    assert.equal(res.status, 200);
-    assert.equal(res.data.data.isPinned, true);
+  await check("GET /notes/article/:id is gone (notes feature removed)", async () => {
+    const res = await api(`/notes/article/${articleId}`);
+    assert.equal(res.status, 404);
   });
 
   // ---------- ai routes ----------
@@ -524,7 +377,7 @@ async function main() {
     assert.equal(res.data.success, false);
   });
 
-  await check("valid news with no quiz is retrievable", async () => {
+  await check("plain news article is retrievable", async () => {
     const plain = await News.create({
       source: "Indian Express",
       headline: "Defence ministry announces procurement policy update",
@@ -536,10 +389,8 @@ async function main() {
     });
     const res = await api(`/news/${plain._id}`);
     assert.equal(res.status, 200);
-    // An article with no quiz stores an empty array (Mongoose default),
-    // which is what the frontend's `quiz?.questions?.length` check expects.
-    assert.ok(Array.isArray(res.data.data.quiz));
-    assert.equal(res.data.data.quiz.length, 0);
+    assert.equal(res.data.data.quiz, undefined);
+    assert.ok(res.data.data.headline);
   });
 
   await check("UTC day boundary: article from yesterday is not 'today'", async () => {
@@ -747,7 +598,6 @@ async function main() {
   });
 
   // ---------- teardown ----------
-  await Note.deleteMany({});
   await News.deleteMany({});
 
   server.close();

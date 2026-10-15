@@ -1,7 +1,7 @@
 {
   "name": "cura-news-backend",
   "version": "1.0.0",
-  "description": "AI Current Affairs News Summarizer Backend",
+  "description": "AI News Summarizer Backend - daily news summaries from multiple sources",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
@@ -13,13 +13,12 @@
     "topics:backfill": "node scripts/topics-backfill.mjs",
     "topics:report": "node scripts/topics-report.mjs",
     "topics:sample": "node scripts/topics-sample.mjs"
+    ,"content:backfill": "node scripts/backfill-content-fields.mjs"
   },
   "keywords": [
     "news",
     "ai",
-    "summarizer",
-    "upsc",
-    "cds"
+    "summarizer"
   ],
   "author": "",
   "license": "ISC",

@@ -206,7 +206,7 @@ export const getTodayNews = asyncHandler(async (req, res, next) => {
     facetCounts(facetFilter, "tags", true),
   ]);
 
-  // Hide quiz answers from public
+  // Serialize through the public shape
   const publicNews = news.map((article) => article.getPublicNews());
 
   res.status(200).json({
@@ -261,9 +261,6 @@ export const getNewsByID = asyncHandler(async (req, res, next) => {
     throw new AppError("This article is not published", 404);
   }
 
-  // Quiz answers are always stripped. `?includeAnswers=true` used to bypass
-  // this with no authentication at all, handing the answer key for every
-  // article to any anonymous caller.
   res.status(200).json({
     success: true,
     message: "News article retrieved successfully",
@@ -374,9 +371,10 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
       update.detailedConfidence = result.confidence;
       update.detailedGeneratedAt = new Date();
       update.category = result.category;
-      update.tags = result.syllabusTags.length
-        ? result.syllabusTags
-        : locked.tags;
+      update.tags =
+        (result.topicTags || result.syllabusTags || []).length > 0
+          ? result.topicTags || result.syllabusTags
+          : locked.tags;
       update.$unset = {
         lastError: 1,
       };
@@ -452,7 +450,6 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
  *   "Other"). One of Politics, Business, Sports, Tech, World, Entertainment,
  *   Other
  * @param {string[]} req.body.subtopics - Subtopics (optional, max 5)
- * @param {Object[]} req.body.quiz - Quiz questions (optional, 3-5)
  * @param {string} req.body.url - Original article URL (optional)
  * @param {Object} res - Express response object
  * @returns {Object} - { success, message, data: created news }
@@ -464,15 +461,15 @@ export const createNews = asyncHandler(async (req, res, next) => {
     headline,
     summary,
     bulletPoints,
+    keyFacts,
     tags,
     category,
     subtopics,
-    quiz,
     url,
   } = req.body;
 
   // Validate required fields
-  if (!source || !headline || !summary || !bulletPoints || !tags) {
+  if (!source || !headline || !summary || (!bulletPoints && !keyFacts) || !tags) {
     throw new AppError(
       "Please provide: source, headline, summary, bulletPoints, and tags",
       400,
@@ -509,45 +506,16 @@ export const createNews = asyncHandler(async (req, res, next) => {
   }
 
   // Validate bullet points count
-  const bulletPointsArray = Array.isArray(bulletPoints)
-    ? bulletPoints
-    : [bulletPoints];
-  if (bulletPointsArray.length < 3 || bulletPointsArray.length > 10) {
-    throw new AppError("Must provide between 3 and 10 bullet points", 400);
+  const bulletPointsArray = Array.isArray(keyFacts || bulletPoints)
+    ? (keyFacts || bulletPoints)
+    : [keyFacts || bulletPoints];
+  if (bulletPointsArray.length > 5) {
+    throw new AppError("Must provide no more than 5 key facts", 400);
   }
 
   // Validate tags count
   if (tagsArray.length < 1 || tagsArray.length > 3) {
     throw new AppError("Must have between 1 and 3 tags", 400);
-  }
-
-  // Validate quiz format if provided
-  if (quiz && Array.isArray(quiz)) {
-    if (quiz.length < 3 || quiz.length > 5) {
-      throw new AppError("Must have between 3 and 5 quiz questions", 400);
-    }
-
-    for (let i = 0; i < quiz.length; i++) {
-      const q = quiz[i];
-      if (
-        !q.question ||
-        !Array.isArray(q.options) ||
-        q.options.length !== 4 ||
-        !q.answer
-      ) {
-        throw new AppError(
-          `Quiz question ${i + 1} is invalid. Each question must have: question (string), options (4 strings), answer (A-D)`,
-          400,
-        );
-      }
-
-      if (!["A", "B", "C", "D"].includes(q.answer)) {
-        throw new AppError(
-          `Quiz question ${i + 1}: answer must be A, B, C, or D`,
-          400,
-        );
-      }
-    }
   }
 
   // Create news article
@@ -557,10 +525,10 @@ export const createNews = asyncHandler(async (req, res, next) => {
     headline,
     summary,
     bulletPoints: bulletPointsArray,
+    keyFacts: bulletPointsArray,
     tags: tagsArray,
     category,
     subtopics: subtopics || [],
-    quiz: quiz || [],
     url,
     isPublished: true,
   });
