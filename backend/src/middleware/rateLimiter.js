@@ -2,7 +2,7 @@
  * Rate limiting middleware
  *
  * The AI and news-ingestion endpoints spend real money on paid upstream APIs
- * (OpenAI, NewsAPI) and were previously reachable with no throttle at all, so
+ * (AI providers and RSS ingestion) and were previously reachable with no throttle at all, so
  * an anonymous loop could exhaust the account budget in minutes.
  */
 
@@ -65,7 +65,7 @@ export const authLimiter = createLimiter({
 });
 
 /**
- * Limiter for AI endpoints. Each call is a billed OpenAI request, so this one
+ * Limiter for AI endpoints. Each call is a billed provider request, so this one
  * can be disabled locally via RATE_LIMIT_AI=false while iterating.
  */
 export const aiLimiter = createLimiter({

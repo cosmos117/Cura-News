@@ -11,6 +11,25 @@ const SECTION_HINTS = {
   india: "politics-governance",
   technology: "science-technology",
   tech: "science-technology",
+  opinion: "opinion-editorial",
+  editorial: "opinion-editorial",
+  agriculture: "agriculture-rural",
+  rural: "agriculture-rural",
+  culture: "culture-lifestyle",
+  lifestyle: "culture-lifestyle",
+};
+
+const HINT_ALIASES = {
+  polity: "politics-governance",
+  politics: "politics-governance",
+  economy: "economy-business",
+  business: "economy-business",
+  international: "world-affairs",
+  world: "world-affairs",
+  defense: "defence-security",
+  defence: "defence-security",
+  science: "science-technology",
+  technology: "science-technology",
 };
 
 const words = (text) => String(text || "").toLowerCase();
@@ -25,13 +44,17 @@ export const classifyByRules = (article) => {
   })).sort((a, b) => b.score - a.score);
   const top = scored[0];
   const second = scored[1];
-  const sectionHint = SECTION_HINTS[words(article.section)];
+  const feedHints = (article.topicHints || [])
+    .map((hint) => TOPICS.find((topic) => topic.id === hint)?.id || HINT_ALIASES[words(hint)] || SECTION_HINTS[words(hint)])
+    .filter(Boolean);
+  const sectionHint = SECTION_HINTS[words(article.section)] || feedHints[0];
+  const hintedTop = scored.find(({ topic }) => feedHints.includes(topic.id));
 
   if (top?.score >= 2 || (top?.score > 0 && (!second || top.score - second.score >= 1))) {
     return { topic: top.topic.id, secondaryTopics: [], topicSource: "KEYWORD", topicConfidence: top.score >= 2 ? "high" : "medium" };
   }
-  if (sectionHint) {
-    return { topic: sectionHint, secondaryTopics: [], topicSource: "SECTION", topicConfidence: "low" };
+  if (hintedTop?.score > 0 || (feedHints.length === 1 && sectionHint)) {
+    return { topic: hintedTop?.topic.id || sectionHint, secondaryTopics: [], topicSource: "SECTION", topicConfidence: "low" };
   }
   return null;
 };

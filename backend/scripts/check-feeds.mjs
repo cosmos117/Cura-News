@@ -7,10 +7,11 @@ const parser = new Parser({
   timeout: config.FETCH_TIMEOUT_MS,
   headers: { "User-Agent": "CURA-News/1.0 (+https://github.com/cosmos117/Cura-News)" },
 });
+const checkDisabled = process.argv.includes("--all");
 
 for (const source of FEED_SOURCES) {
   for (const feed of source.feeds) {
-    if (!feed.enabled) {
+    if (!feed.enabled && !checkDisabled) {
       console.log(`${feed.feedId}: DISABLED - ${feed.note || "disabled"}`);
       continue;
     }

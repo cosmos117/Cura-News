@@ -2,23 +2,12 @@ import News from "../models/News.js";
 import { config } from "../config/env.js";
 import { generateStructured } from "./aiService.js";
 import { extractArticleText } from "./articleTextExtractor.js";
-
-const VALID_CATEGORIES = [
-  "Politics",
-  "Business",
-  "Sports",
-  "Tech",
-  "World",
-  "Entertainment",
-  "Other",
-];
-const VALID_TAGS = [
-  "Polity",
-  "Economy",
-  "Defense",
-  "Science",
-  "International",
-];
+import { PROMPT_VERSION } from "./content/prompts.js";
+import {
+  detailedContentSchema,
+  hasHighNgramOverlap,
+} from "./content/schema.js";
+import { tierForWordCount, TIER_FULL } from "./content/tiers.js";
 
 const SYSTEM_PROMPT = `You are a careful news explainer for a general news aggregator read by a broad audience.
 Rules:
@@ -26,72 +15,57 @@ Rules:
 2. Write in your own words. Never copy sentences from the source.
 3. Stay neutral and factual. No opinions or loaded language.
 4. Keep names, numbers, dates and places exactly as given.
-5. If the text is too thin for 8 sentences, write fewer and set confidence to "low". Never pad.
-6. Output ONLY valid JSON matching the requested schema.`;
+5. The detailed narrative has a different job than the short summary and key facts provided below: it explains why it happened, background and context, who is affected, and what happens next - ONLY where the source states it. It must not begin with, or re-use sentences from, the summary.
+6. If the extracted article is too thin for an 80-100 word narrative, set "detailed" to null. Never pad or repeat.
+7. Output ONLY valid JSON matching the requested schema.`;
 
 const countWords = (value) => value.trim().split(/\s+/).filter(Boolean).length;
-const countSentences = (value) =>
-  value.split(/[.!?]+(?=\s|$)/).map((part) => part.trim()).filter(Boolean)
-    .length;
+
+const normalizeParagraphs = (value) =>
+  value
+    .replace(/\r\n?/g, "\n")
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .join("\n\n");
 
 const normalizeOutput = (output) => {
   if (!output || typeof output !== "object") {
     throw new Error("Detailed AI output must be an object");
   }
-  const detailedSummary = String(output.detailedSummary || "").trim();
-  const heading = String(output.heading || "").trim();
 
-  if (!heading || heading.length > 120) {
-    throw new Error("Detailed heading must be non-empty and at most 120 characters");
+  const parsed = detailedContentSchema.safeParse(output);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new Error(`${issue.path.join(".") || "output"}: ${issue.message}`);
   }
-  const sentenceCount = countSentences(detailedSummary);
-  const wordCount = countWords(detailedSummary);
-  if (sentenceCount < 5 || sentenceCount > 14) {
-    throw new Error("Detailed summary must contain 5-14 sentences");
-  }
-  if (wordCount < 100 || wordCount > 260) {
-    throw new Error("Detailed summary must contain 100-260 words");
-  }
-  if (!VALID_CATEGORIES.includes(output.category)) {
-    throw new Error("Detailed summary returned an invalid category");
-  }
-  if (!["high", "medium", "low"].includes(output.confidence)) {
-    throw new Error("Detailed summary returned an invalid confidence");
-  }
-  if (
-    !Array.isArray(output.topicTags) ||
-    output.topicTags.some((tag) => !VALID_TAGS.includes(tag))
-  ) {
-    throw new Error("Detailed summary returned invalid topic tags");
+  if (parsed.data.detailed === null) {
+    throw new Error("Detailed narrative was null (source text too thin)");
   }
 
   return {
-    heading,
-    detailedSummary,
-    topicTags: output.topicTags,
-    category: output.category,
-    confidence: output.confidence,
+    ...parsed.data,
+    detailed: normalizeParagraphs(parsed.data.detailed),
   };
 };
 
-const buildPrompt = ({ source, title, text }) => `Source: ${source}
+const buildPrompt = ({ source, title, text, summary, keyFacts }) => `Source: ${source}
 Title: ${title}
 Text: ${text}
 
+The article already has this short summary and these key facts. Your narrative MUST add what they leave out (background, cause, impact, what happens next) and MUST NOT repeat their sentences:
+Summary: ${summary || "(none)"}
+Key facts: ${keyFacts?.length ? keyFacts.join(" | ") : "(none)"}
+
 Return JSON:
 {
-  "heading": "string, max 120 chars",
-  "detailedSummary": "5-14 factual sentences in 3-4 short paragraphs, preferably 8-12 sentences and 100-260 words",
-  "topicTags": ["Polity", "Economy", "Defense", "Science", "International"],
+  "detailed": "80-100 words in 2-3 short paragraphs (separate paragraphs with a blank line), or null if the text is too thin",
+  "tags": ["Polity", "Economy", "Defense", "Science", "International"],
   "category": "Politics|Business|Sports|Tech|World|Entertainment|Other",
   "confidence": "high|medium|low"
 }`;
 
-const buildRepairPrompt = ({ source, title, text, error }) => `${buildPrompt({
-  source,
-  title,
-  text,
-})}
+const buildRepairPrompt = (input, error) => `${buildPrompt(input)}
 
 Your previous output failed validation because: ${error}
 Return only corrected JSON.`;
@@ -127,30 +101,44 @@ export async function generateDetailedSummary(article) {
     };
   }
 
+  // The dedicated detailed path fetches the full article page, but if the
+  // A readable page must contain enough material for an honest 80-100 word
+  // narrative. The extractor has already parsed the full article page.
+  const extractedWordCount = countWords(extracted.text);
+  if (extractedWordCount < 120) {
+    return {
+      status: "UNAVAILABLE",
+      detailSourceType: extracted.sourceType,
+      reason: `Source text too thin for detailed narrative (${extractedWordCount} words, need >= 120)`,
+    };
+  }
+
+  // The narrative must add to, not repeat, what the Overview tab already
+  // shows, so the existing summary and key facts go into the prompt.
   const input = {
     source: article.source,
     title: article.headline,
     text: extracted.text,
+    summary: article.summary,
+    keyFacts: article.keyFacts?.length ? article.keyFacts : article.bulletPoints,
   };
   let output;
+  let modelUsed = null;
   try {
-    output = normalizeOutput(
-      await generateStructured({
-        systemPrompt: SYSTEM_PROMPT,
-        userPrompt: buildPrompt(input),
-      }),
-    );
+    const rawOutput = await generateStructured({
+      systemPrompt: SYSTEM_PROMPT,
+      userPrompt: buildPrompt(input),
+    });
+    output = normalizeOutput(rawOutput);
+    modelUsed = rawOutput.__aiMeta?.modelUsed || null;
   } catch (firstError) {
     try {
-      output = normalizeOutput(
-        await generateStructured({
-          systemPrompt: SYSTEM_PROMPT,
-          userPrompt: buildRepairPrompt({
-            ...input,
-            error: firstError.message,
-          }),
-        }),
-      );
+      const rawRepairOutput = await generateStructured({
+        systemPrompt: SYSTEM_PROMPT,
+        userPrompt: buildRepairPrompt(input, firstError.message),
+      });
+      output = normalizeOutput(rawRepairOutput);
+      modelUsed = rawRepairOutput.__aiMeta?.modelUsed || null;
     } catch (repairError) {
       return {
         status: "FAILED",
@@ -160,17 +148,33 @@ export async function generateDetailedSummary(article) {
     }
   }
 
-  if (hasHighSourceOverlap(output.detailedSummary, extracted.text)) {
+  if (hasHighSourceOverlap(output.detailed, extracted.text)) {
     return {
       status: "FAILED",
       detailSourceType: extracted.sourceType,
       reason: "Detailed summary was too similar to the source text",
     };
   }
+  if (
+    hasHighNgramOverlap(output.detailed, [
+      article.summary,
+      ...(article.keyFacts?.length ? article.keyFacts : article.bulletPoints || []),
+    ])
+  ) {
+    return {
+      status: "FAILED",
+      detailSourceType: extracted.sourceType,
+      reason: "Detailed summary repeated the stored summary or key facts",
+    };
+  }
 
   return {
     status: "DONE",
     detailSourceType: extracted.sourceType,
+    promptVersion: PROMPT_VERSION,
+    sourceWordCount: extractedWordCount,
+    sourceTier: tierForWordCount(extractedWordCount),
+    modelUsed,
     ...output,
   };
 }
@@ -203,28 +207,58 @@ export async function generateTopDetailedSummaries() {
   for (const article of candidates) {
     const locked = await News.findOneAndUpdate(
       { _id: article._id, detailedStatus: "NONE" },
-      { $set: { detailedStatus: "PENDING" } },
+      { $set: { detailedStatus: "PENDING", detailedLockedAt: new Date() } },
       { new: true },
     );
     if (!locked) continue;
 
-    const result = await generateDetailedSummary(locked);
+    let result;
+    try {
+      result = await generateDetailedSummary(locked);
+    } catch (error) {
+      result = {
+        status: "FAILED",
+        detailSourceType: "SNIPPET_ONLY",
+        reason: error.message,
+      };
+    } finally {
+      // The status update below is deliberately kept in the same loop so an
+      // exception can never leave a lock in PENDING indefinitely.
+    }
     const update = {
       detailedStatus: result.status,
       detailSourceType: result.detailSourceType,
+      detailedLockedAt: null,
     };
     if (result.status === "DONE") {
       Object.assign(update, {
-        headline: result.heading,
-        detailedSummary: result.detailedSummary,
+        detailedSummary: result.detailed,
         detailedConfidence: result.confidence,
         detailedGeneratedAt: new Date(),
+        modelUsed: result.modelUsed || locked.modelUsed,
         category: result.category,
-        tags: (result.topicTags || result.syllabusTags || []).length
-          ? result.topicTags || result.syllabusTags
-          : locked.tags,
+        // v2: the headline is owned by the ingestion-time call; the detailed
+        // narrative only refines tags/category, never the title.
+        tags: result.tags?.length ? result.tags : locked.tags,
+        promptVersion: result.promptVersion,
+        sourceWordCount: result.sourceWordCount,
+        lastError: null,
       });
+      if (result.sourceTier) update.sourceTier = result.sourceTier;
       completed += 1;
+    } else if (result.status === "FAILED") {
+      // Persist the reason so the audit script can group failures instead of
+      // showing 128 identical "(none)" rows.
+      update.lastError = String(
+        result.reason || "Detailed summary generation failed",
+      ).slice(0, 500);
+    } else if (result.status === "UNAVAILABLE") {
+      // Thin or blocked source: mark unavailable and record why so the article
+      // is not retried endlessly.
+      update.lastError = String(
+        result.reason ||
+          "Detailed summary is unavailable. Read the full story at the source.",
+      ).slice(0, 500);
     }
     await News.findByIdAndUpdate(article._id, update, {
       runValidators: true,

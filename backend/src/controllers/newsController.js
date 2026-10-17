@@ -1,6 +1,6 @@
 import News from "../models/News.js";
 import { AppError, asyncHandler } from "../middleware/errorHandler.js";
-import { utcDayRange } from "../utils/date.js";
+import { istDayKey, istDayRange } from "../utils/date.js";
 import { NEWS_CATEGORIES } from "../utils/category.js";
 import { TOPICS } from "../config/topics.js";
 import {
@@ -18,6 +18,15 @@ const VALID_TAGS = [
   "International",
 ];
 const VALID_TOPIC_VALUES = TOPICS.flatMap((topic) => [topic.id, topic.label]);
+const LEGACY_CATEGORY_TOPIC = {
+  Politics: "politics-governance",
+  Business: "economy-business",
+  Sports: "sports",
+  Tech: "science-technology",
+  World: "world-affairs",
+  Entertainment: "entertainment",
+  Other: "other",
+};
 
 /**
  * Split a comma-separated query value into a clean array.
@@ -80,7 +89,10 @@ const buildArticleFilter = ({
 } = {}) => {
   const filter = {
     isPublished: true,
-    date: utcDayRange(),
+    $or: [
+      { publishedDayKey: istDayKey() },
+      { publishedDayKey: { $exists: false }, publishedAt: istDayRange() },
+    ],
   };
 
   const term = search?.trim();
@@ -127,6 +139,36 @@ const facetCounts = async (filter, field, unwind = false) => {
   const rows = await News.aggregate(pipeline);
   return rows.reduce((acc, row) => {
     if (row._id) acc[row._id] = row.count;
+    return acc;
+  }, {});
+};
+
+const topicFacetCounts = async (filter) => {
+  const rows = await News.aggregate([
+    { $match: filter },
+    {
+      $project: {
+        topic: {
+          $switch: {
+            branches: [
+              ...TOPICS.filter((topic) => topic.id !== "other").map((topic) => ({
+                case: { $eq: ["$topic", topic.id] },
+                then: topic.id,
+              })),
+              ...Object.entries(LEGACY_CATEGORY_TOPIC).map(([category, topic]) => ({
+                case: { $eq: ["$category", category] },
+                then: topic,
+              })),
+            ],
+            default: "other",
+          },
+        },
+      },
+    },
+    { $group: { _id: "$topic", count: { $sum: 1 } } },
+  ]);
+  return rows.reduce((acc, row) => {
+    acc[row._id] = row.count;
     return acc;
   }, {});
 };
@@ -200,7 +242,7 @@ export const getTodayNews = asyncHandler(async (req, res, next) => {
   const [totalCount, news, byCategory, byLegacyCategory, bySource, byTag] = await Promise.all([
     News.countDocuments(filter),
     News.find(filter).sort({ date: -1 }).limit(parsedLimit).skip(parsedSkip).exec(),
-    facetCounts(facetFilter, "topic"),
+    topicFacetCounts(facetFilter),
     facetCounts(facetFilter, "category"),
     facetCounts(facetFilter, "source"),
     facetCounts(facetFilter, "tags", true),
@@ -221,9 +263,15 @@ export const getTodayNews = asyncHandler(async (req, res, next) => {
     // Every category is present, including zero-count ones, so the chip bar
     // does not reflow as filters change.
     facets: {
-      byCategory: [...TOPICS.map((topicItem) => [topicItem.label, byCategory[topicItem.id] || 0]),
-        ...NEWS_CATEGORIES.map((categoryName) => [categoryName, byLegacyCategory[categoryName] || 0])]
-        .reduce((acc, [label, count]) => ({ ...acc, [label]: Math.max(acc[label] || 0, count) }), {}),
+      byCategory: NEWS_CATEGORIES.reduce((acc, categoryName) => {
+        if (!Object.hasOwn(acc, categoryName)) {
+          acc[categoryName] = byLegacyCategory[categoryName] || 0;
+        }
+        return acc;
+      }, TOPICS.reduce((acc, topicItem) => {
+        acc[topicItem.label] = byCategory[topicItem.id] || 0;
+        return acc;
+      }, {})),
       bySource: Object.fromEntries(
         VALID_SOURCES.map((s) => [s, bySource[s] || 0]),
       ),
@@ -290,30 +338,49 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
     }
 
     if (article.detailedStatus === "PENDING") {
-      return res.status(202).json({
-        success: true,
-        message: "Generating detailed summary...",
-        data: article.getPublicNews(),
-      });
+      const lockAge = Date.now() - (article.detailedLockedAt?.getTime() || 0);
+      if (lockAge < 2 * 60 * 1000) {
+        return res.status(202).json({
+          success: true,
+          message: "Generating detailed summary...",
+          data: article.getPublicNews(),
+        });
+      }
+      await News.updateOne(
+        { _id: id, detailedStatus: "PENDING" },
+        { $set: { detailedStatus: "NONE", detailedLockedAt: null } },
+      );
     }
 
-    const generatedToday = await dailyDetailedCount();
-    if (generatedToday >= detailedConfig.AI_DAILY_LIMIT) {
-      return res.status(429).json({
+    let locked;
+    try {
+      const generatedToday = await dailyDetailedCount();
+      if (generatedToday >= detailedConfig.AI_DAILY_LIMIT) {
+        return res.status(429).json({
+          success: false,
+          message: "Detailed summary will be available soon",
+        });
+      }
+
+      locked = await News.findOneAndUpdate(
+        {
+          _id: id,
+          isPublished: true,
+          detailedStatus: { $in: ["NONE", "FAILED", "UNAVAILABLE"] },
+        },
+        { $set: { detailedStatus: "PENDING", detailedLockedAt: new Date() } },
+        { new: true },
+      );
+    } catch (error) {
+      console.error("Detailed summary request setup failed:", {
+        articleId: id,
+        message: error.message,
+      });
+      return res.status(503).json({
         success: false,
-        message: "Detailed summary will be available soon",
+        message: "Detailed summary service is temporarily unavailable. Please try again.",
       });
     }
-
-    const locked = await News.findOneAndUpdate(
-      {
-        _id: id,
-        isPublished: true,
-        detailedStatus: { $in: ["NONE", "FAILED", "UNAVAILABLE"] },
-      },
-      { $set: { detailedStatus: "PENDING" } },
-      { new: true },
-    );
 
     if (!locked) {
       const current = await News.findById(id);
@@ -341,6 +408,7 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
         {
           $set: {
             detailedStatus: "FAILED",
+            detailedLockedAt: null,
             detailSourceType: "SNIPPET_ONLY",
             lastError: "Detailed summary generation failed",
           },
@@ -360,29 +428,47 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
         data: failed.getPublicNews(),
       });
     }
+
+    // Normalise the result status so any unexpected value is treated as a
+    // failure rather than falling through with inconsistent state.
+    const status = result.status === "DONE" ? "DONE" : result.status === "FAILED" ? "FAILED" : "UNAVAILABLE";
+
     const update = {
-      detailedStatus: result.status,
-      detailSourceType: result.detailSourceType,
+      detailedStatus: status,
+      detailSourceType: result.detailSourceType ?? "SNIPPET_ONLY",
+      detailedLockedAt: null,
     };
 
-    if (result.status === "DONE") {
-      update.headline = result.heading;
-      update.detailedSummary = result.detailedSummary;
+    if (status === "DONE") {
+      // v2: the detailed narrative never rewrites the headline; it only
+      // fills the detailed fields and may refine tags/category.
+      update.detailedSummary = result.detailed;
       update.detailedConfidence = result.confidence;
       update.detailedGeneratedAt = new Date();
       update.category = result.category;
-      update.tags =
-        (result.topicTags || result.syllabusTags || []).length > 0
-          ? result.topicTags || result.syllabusTags
-          : locked.tags;
+      update.tags = result.tags?.length > 0 ? result.tags : locked.tags;
+      update.promptVersion = result.promptVersion;
+      update.sourceWordCount = result.sourceWordCount;
+      if (result.sourceTier) update.sourceTier = result.sourceTier;
       update.$unset = {
         lastError: 1,
       };
-    } else if (result.status === "FAILED") {
-      update.detailedSummary = undefined;
+    } else {
+      // FAILED or UNAVAILABLE: clear the detailed narrative and record why.
+      // Use $unset (not `undefined`) so Mongoose never tries to validate an
+      // undefined value against the String field.
+      update.$unset = {
+        detailedSummary: 1,
+        detailedGeneratedAt: 1,
+        detailedConfidence: 1,
+      };
       update.lastError = (
-        result.reason || "Detailed summary generation failed"
+        result.reason ||
+        (status === "UNAVAILABLE"
+          ? "Detailed summary is unavailable. Read the full story at the source."
+          : "Detailed summary generation failed")
       ).slice(0, 500);
+      update.$unset.sourceTier = 1;
     }
 
     let saved;
@@ -397,22 +483,34 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
         message: error.message,
       });
 
-      saved = await News.findByIdAndUpdate(
-        id,
-        {
-          $set: {
-            detailedStatus: "FAILED",
-            detailSourceType: "SNIPPET_ONLY",
-            lastError: "Detailed summary could not be saved",
+      try {
+        saved = await News.findByIdAndUpdate(
+          id,
+          {
+            $set: {
+              detailedStatus: "FAILED",
+              detailSourceType: "SNIPPET_ONLY",
+              lastError: "Detailed summary could not be saved",
+            },
+            $unset: {
+              detailedSummary: 1,
+              detailedGeneratedAt: 1,
+              detailedConfidence: 1,
+              sourceTier: 1,
+            },
           },
-          $unset: {
-            detailedSummary: 1,
-            detailedGeneratedAt: 1,
-            detailedConfidence: 1,
-          },
-        },
-        { new: true, runValidators: true },
-      );
+          { new: true, runValidators: true },
+        );
+      } catch (fallbackError) {
+        console.error("Detailed summary failure state could not be saved:", {
+          articleId: id,
+          message: fallbackError.message,
+        });
+        return res.status(503).json({
+          success: false,
+          message: "Detailed summary service is temporarily unavailable. Please try again.",
+        });
+      }
 
       if (!saved) throw new AppError("News article not found", 404);
       return res.status(422).json({
@@ -423,12 +521,12 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
     }
     if (!saved) throw new AppError("News article not found", 404);
 
-    return res.status(result.status === "DONE" ? 200 : 422).json({
-      success: result.status !== "FAILED",
+    return res.status(status === "DONE" ? 200 : 422).json({
+      success: status !== "FAILED",
       message:
-        result.status === "DONE"
+        status === "DONE"
           ? "Detailed summary generated"
-          : result.status === "UNAVAILABLE"
+          : status === "UNAVAILABLE"
             ? "Detailed summary is unavailable. Read the full story at the source."
             : "Detailed summary generation failed. Please try again.",
       data: saved.getPublicNews(),
@@ -715,7 +813,10 @@ export const getNewsStats = asyncHandler(async (req, res, next) => {
   const totalNews = await News.countDocuments({ isPublished: true });
   const todayNews = await News.countDocuments({
     isPublished: true,
-    date: utcDayRange(),
+    $or: [
+      { publishedDayKey: istDayKey() },
+      { publishedDayKey: { $exists: false }, publishedAt: istDayRange() },
+    ],
   });
 
   const sourceStats = await News.aggregate([
@@ -769,53 +870,4 @@ export const getNewsStats = asyncHandler(async (req, res, next) => {
       }, {}),
     },
   });
-});
-
-/**
- * Fetch and process daily news from NewsAPI
- * Runs the complete pipeline: fetch → dedupe → filter → summarize → store
- * GET /api/news/fetch-daily
- *
- * Protected and rate limited at the route level. Returns 202 immediately and
- * runs the pipeline in the background; the processor holds an in-flight lock
- * so a second request cannot start an overlapping run.
- *
- * @param {Object} req - Express request object
- * @param {string} req.query.skipAIFilter - Optional: "true" to use keyword
- *   filter only (cheaper, less precise)
- * @param {Object} res - Express response object
- */
-export const fetchDailyNews = asyncHandler(async (req, res, next) => {
-  const { skipAIFilter } = req.query;
-
-  res.status(202).json({
-    success: true,
-    message: "📡 Daily news pipeline started. Processing in background...",
-    info: "Check /api/news/today after a few seconds to see new articles",
-    estimatedTime:
-      "30-60 seconds depending on API availability and article count",
-  });
-
-  // Run pipeline in background (don't block the response). The promise is
-  // tracked on the singleton so graceful shutdown and overlap detection can
-  // see it.
-  (async () => {
-    try {
-      const newsProcessor = (await import("../services/newsProcessor.js"))
-        .default;
-
-      const report = await newsProcessor.processDailyNews({
-        skipAIFilter: skipAIFilter === "true",
-      });
-
-      if (report.alreadyRunning) {
-        console.log("ℹ️  Pipeline request ignored - a run is already in progress");
-        return;
-      }
-
-      console.log("✅ Pipeline completed:", report);
-    } catch (error) {
-      console.error("❌ Background pipeline error:", error.message);
-    }
-  })();
 });

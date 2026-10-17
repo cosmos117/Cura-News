@@ -70,6 +70,7 @@ export default function Article() {
 
     let cancelled = false;
     let pollTimer;
+    const startedAt = Date.now();
     setGeneratingDetailed(true);
     setActionError(null);
 
@@ -95,6 +96,17 @@ export default function Article() {
           return;
         }
 
+        if (Date.now() - startedAt >= 90 * 1000) {
+          setActionError(
+            "Detailed summary is taking too long. Please try again in a moment.",
+          );
+          setArticle((current) =>
+            current ? { ...current, detailedStatus: "FAILED" } : current,
+          );
+          setGeneratingDetailed(false);
+          return;
+        }
+
         pollTimer = window.setTimeout(readUntilComplete, 2000);
       } catch (err) {
         if (cancelled) return;
@@ -102,7 +114,13 @@ export default function Article() {
           setArticle(err.response.data.data);
         }
         setActionError(
-          getErrorMessage(err, "Detailed summary generation failed"),
+          getErrorMessage(
+            err,
+            "Detailed summary could not be generated right now. Please try again.",
+          ),
+        );
+        setArticle((current) =>
+          current ? { ...current, detailedStatus: "NONE" } : current,
         );
         setGeneratingDetailed(false);
       }
@@ -312,7 +330,7 @@ export default function Article() {
                       </p>
                     )}
                     {detailedSummary
-                      .split(/\n{2,}/)
+                      .split(/\n+/)
                       .map((paragraph, index) => (
                         <p key={index} className="ai-summary__body">
                           {paragraph}

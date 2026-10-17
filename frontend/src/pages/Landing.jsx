@@ -27,7 +27,7 @@ const FEATURES = [
   {
     icon: SlidersHorizontal,
     title: "Filter by what matters to you",
-    text: "Twelve broad categories and five topic tags — Polity, Economy, Defense, Science, International — with search, source, and category filters that combine.",
+    text: "Fifteen broad categories and five topic tags — Polity, Economy, Defense, Science, International — with search, source, and category filters that combine.",
   },
   {
     icon: RefreshCw,
@@ -64,7 +64,7 @@ const STEPS = [
 
 const STATS = [
   { value: "3", label: "Trusted publishers" },
-  { value: "12", label: "News categories" },
+  { value: "15", label: "News categories" },
   { value: "5", label: "Topic tags" },
   { value: "15 min", label: "Ingest refresh" },
 ];
@@ -120,9 +120,9 @@ export default function Landing() {
               Cut the noise. <span className="landing-title__accent">Keep the news that matters.</span>
             </h1>
             <p className="landing-sub">
-              CURA News aggregates The Hindu, Indian Express and Times of India,
-              writes clear AI summaries of each story —
-              so an hour of headlines becomes a ten-minute catch-up.
+              CURA News aggregates The Hindu, Indian Express and Times of India
+              — clear AI summaries of every story, so an hour of headlines
+              becomes a 5-minute catch up.
             </p>
             <div className="landing-cta-row">
               <Link to={primaryTo} className="btn btn-primary btn-lg">
@@ -159,10 +159,6 @@ export default function Landing() {
             </div>
             <div className="mock-float mock-float--brief">
               <BookOpen className="icon icon--lg" />
-              <div>
-                <p className="mock-float__title">Key points ready</p>
-                <p className="mock-float__sub">Brief plus bullets</p>
-              </div>
             </div>
             <div className="mock-float mock-float--ai">
               <Sparkles className="icon icon--lg" />
@@ -258,13 +254,8 @@ export default function Landing() {
             <span className="brand__name">CURA News</span>
           </div>
           <p>AI-powered news summaries from multiple trusted sources — with briefs and key points.</p>
-          <nav className="landing-footer__links" aria-label="Footer">
-            <Link to={primaryTo}>{isAuthenticated ? "Dashboard" : "Get started"}</Link>
-            {!isAuthenticated && <Link to="/login">Sign in</Link>}
-            <a href="#features">Features</a>
-            <a href="#sources">Sources</a>
-          </nav>
-          <p className="landing-footer__copy">© {new Date().getFullYear()} CURA News. Summaries respect publisher robots rules.</p>
+          
+          <p className="landing-footer__copy">© {new Date().getFullYear()} CURA News. Summaries may contain inaccuracies.</p>
         </div>
       </footer>
     </div>

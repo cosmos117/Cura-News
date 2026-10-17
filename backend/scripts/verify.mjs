@@ -7,6 +7,7 @@
 
 import { MongoMemoryServer } from "mongodb-memory-server";
 import assert from "node:assert/strict";
+import axios from "axios";
 
 let mongod;
 let baseUrl;
@@ -26,11 +27,12 @@ const check = async (name, fn) => {
   }
 };
 
-const api = async (path, { method = "GET", token, body } = {}) => {
+const api = async (path, { method = "GET", token, body, headers = {} } = {}) => {
   const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       "Content-Type": "application/json",
+      ...headers,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -50,6 +52,7 @@ async function main() {
   process.env.JWT_SECRET = "test-secret-that-is-definitely-long-enough-32";
   process.env.NODE_ENV = "test";
   process.env.CORS_ORIGIN = "http://localhost:3000";
+  process.env.CRON_SECRET = "test-cron-secret";
   // Pinned explicitly: dotenv does not override already-set vars, so these win
   // over any local .env and the assertions below stay deterministic.
   process.env.AI_PROVIDER = "gemini";
@@ -64,6 +67,8 @@ async function main() {
   baseUrl = `http://127.0.0.1:${server.address().port}/api`;
 
   const News = (await import("../src/models/News.js")).default;
+  const { istDayKey } = await import("../src/utils/date.js");
+  const newsProcessor = (await import("../src/services/newsProcessor.js")).default;
   // Ensure indexes (notably the text index behind /news/search) exist before
   // any request is made; autoIndex otherwise builds them in the background and
   // the first $text query 500s.
@@ -88,6 +93,61 @@ async function main() {
   });
 
   const articleId = article._id.toString();
+
+  await check("cleanup deletes old articles but keeps today's articles", async () => {
+    const old = await News.create({
+      source: "Times of India",
+      headline: "Old article outside the current retention day",
+      summary: "This seeded article is deliberately dated before the current day so cleanup must remove it.",
+      bulletPoints: ["old", "retention", "cleanup"],
+      tags: ["Economy"],
+      publishedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      publishedDayKey: "2000-01-01",
+      date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    });
+    const current = await News.create({
+      source: "Times of India",
+      headline: "Today's article remains after retention cleanup",
+      summary: "This seeded article belongs to the current IST day and must remain after cleanup runs.",
+      bulletPoints: ["today", "retention", "cleanup"],
+      tags: ["Economy"],
+      publishedAt: new Date(),
+      publishedDayKey: istDayKey(),
+      date: new Date(),
+    });
+
+    await newsProcessor._cleanupOldNews();
+    assert.equal(await News.exists({ _id: old._id }), null);
+    assert.ok(await News.exists({ _id: current._id }));
+    await News.deleteOne({ _id: current._id });
+  });
+
+  await check("article extractor proceeds when robots returns 403, timeout, or null", async () => {
+    const { extractArticleText } = await import("../src/services/articleTextExtractor.js");
+    const originalGet = axios.get;
+    const html = `<html><body><article>${"Readable article text ".repeat(100)}</article></body></html>`;
+    try {
+      for (const robotsResult of [
+        { status: 403, data: "" },
+        new Error("timeout"),
+        null,
+      ]) {
+        let call = 0;
+        axios.get = async () => {
+          call += 1;
+          if (call === 1) {
+            if (robotsResult instanceof Error) throw robotsResult;
+            return robotsResult;
+          }
+          return { data: html };
+        };
+        const result = await extractArticleText("https://example.com/article");
+        assert.equal(result.available, true);
+      }
+    } finally {
+      axios.get = originalGet;
+    }
+  });
 
   await check("detailed summary fields default safely", async () => {
     assert.equal(article.detailedStatus, "NONE");
@@ -242,8 +302,17 @@ async function main() {
     assert.equal(res.data.data.byTag.Polity, 1);
   });
 
-  await check("GET /news/fetch-daily requires auth (was public)", async () => {
+  await check("GET /news/fetch-daily is removed", async () => {
     const res = await api("/news/fetch-daily");
+    assert.equal(res.status, 404);
+  });
+
+  await check("POST /admin/ingest rejects an invalid cron secret", async () => {
+    const res = await api("/admin/ingest", {
+      method: "POST",
+      headers: { "x-cron-secret": "wrong-secret" },
+      body: {},
+    });
     assert.equal(res.status, 401);
   });
 
@@ -252,8 +321,12 @@ async function main() {
     assert.equal(res.status, 401);
   });
 
-  await check("GET /news/fetch-daily returns 202 when authed", async () => {
-    const res = await api("/news/fetch-daily", { token });
+  await check("POST /admin/ingest returns 202 with the cron secret", async () => {
+    const res = await api("/admin/ingest", {
+      method: "POST",
+      headers: { "x-cron-secret": "test-cron-secret" },
+      body: { dryRun: true },
+    });
     assert.equal(res.status, 202);
   });
 
@@ -403,6 +476,7 @@ async function main() {
       bulletPoints: ["a", "b", "c"],
       tags: ["Economy"],
       date: yesterday,
+      publishedAt: yesterday,
     });
     const res = await api("/news");
     assert.equal(res.data.pagination.total, 2, "today should only include today");

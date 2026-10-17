@@ -10,17 +10,18 @@
 import News from "../models/News.js";
 import { fetchRssArticles } from "./rssFetcher.js";
 import { resolveCategory } from "../utils/category.js";
-import { utcDayRange } from "../utils/date.js";
+import { istDayKey, istDayRange } from "../utils/date.js";
 import { generateTopDetailedSummaries } from "./detailedSummaryService.js";
 import { classifyArticles } from "./topicClassifier.js";
-import * as aiService from "./aiService.js";
+import { generateArticleContent } from "./content/contentGenerator.js";
+import { config } from "../config/env.js";
 
-/**
- * Keys that aiService.summarizeArticle adds for its own bookkeeping. These must
- * never be forwarded to News.create - `source` in particular would overwrite
- * the real publisher and fail the model enum.
- */
-const AI_ONLY_KEYS = ["source", "processedAt"];
+/** Local word counter for sourceWordCount bookkeeping on the fallback path. */
+const countWords = (value) =>
+  String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
 
 /**
  * Pipeline configuration
@@ -44,6 +45,7 @@ class PipelineLogger {
       stored: 0,
       failed: 0,
       duplicates: 0,
+      skippedOutsideRetention: 0,
       startTime: null,
       endTime: null,
     };
@@ -108,6 +110,7 @@ class NewsProcessor {
    * @returns {Promise<Object>} - Pipeline report
    */
   async processDailyNews(options = {}) {
+    const { dryRun = false } = options;
     // Guard against overlapping runs. Each run costs up to ~115 upstream API
     // calls, so concurrent invocations would overlap feed and AI work.
     if (this.isRunning) {
@@ -128,15 +131,11 @@ class NewsProcessor {
       try {
         this.logger.info("🚀 Starting news processing pipeline");
 
-        // The dashboard is a current-day view. Clean the previous snapshot
-        // before every run, including runs where every feed is empty or
-        // contains only URLs already seen.
-        await this._cleanupOldNews();
-
         // Step 1: Fetch articles
         this.logger.info("📡 Step 1: Fetching articles");
-        const articles = await this._fetchArticles();
+        const { articles, skippedOutsideRetention } = await this._fetchArticles();
         this.logger.stats.fetched = articles.length;
+        this.logger.stats.skippedOutsideRetention = skippedOutsideRetention;
 
         if (articles.length === 0) {
           this.logger.warn("❌ No articles fetched");
@@ -163,8 +162,15 @@ class NewsProcessor {
 
         // Step 3: Summarize and enrich with AI
         this.logger.info("🤖 Step 3: AI summarization and enrichment");
-        const summarizedArticles =
-          await this._summarizeArticles(uniqueArticles);
+        const summarizedArticles = await this._summarizeArticles(
+          uniqueArticles,
+          dryRun
+            ? null
+            : async (batch) => {
+                const classified = await classifyArticles(batch);
+                await this._storeArticles(classified);
+              },
+        );
         this.logger.stats.summarized = summarizedArticles.length;
 
         if (summarizedArticles.length === 0) {
@@ -175,11 +181,23 @@ class NewsProcessor {
 
         this.logger.info(`✅ ${summarizedArticles.length} articles summarized`);
 
-        // Step 4: Store in database
-        this.logger.info("💾 Step 4: Storing in database");
-        await this._storeArticles(summarizedArticles);
-        // Clean up old news articles, keeping only current day
-        await this._cleanupOldNews();
+        if (dryRun) {
+          this.logger.info("🧪 Dry run complete; no articles stored or deleted", {
+            summarized: summarizedArticles.length,
+          });
+          this.logger.stats.endTime = Date.now();
+          return this.logger.getReport();
+        }
+
+        // Articles were persisted in bounded batches during summarization.
+        if (this.logger.stats.stored >= config.MIN_ARTICLES_BEFORE_CLEANUP) {
+          await this._cleanupOldNews();
+        } else {
+          this.logger.warn("Skipping cleanup because ingest stored too few articles", {
+            stored: this.logger.stats.stored,
+            minimum: config.MIN_ARTICLES_BEFORE_CLEANUP,
+          });
+        }
         generateTopDetailedSummaries()
           .then((result) =>
             this.logger.info("Tier 2 detailed summaries processed", result),
@@ -222,11 +240,10 @@ class NewsProcessor {
    */
   async _fetchArticles() {
     try {
-      const articles = await fetchRssArticles();
-      return articles;
+      return await fetchRssArticles();
     } catch (error) {
       this.logger.error("Failed to fetch articles", { error: error.message });
-      return [];
+      return { articles: [], skippedOutsideRetention: 0 };
     }
   }
 
@@ -254,27 +271,54 @@ class NewsProcessor {
   }
 
   /**
-   * Step 3: Summarize articles with AI
+   * Step 3: Generate structured content (summary, keyFacts, detailed) with AI
    */
-  async _summarizeArticles(articles) {
+  async _summarizeArticles(articles, onBatch = null) {
     const summarized = [];
+    let pendingBatch = [];
+    let aiCalls = 0;
     for (const article of articles) {
       try {
-        // Full AI summarization
-        const aiResult = await this._summarizeWithRetry(
-          `${article.headline}. ${article.summary}${article.content ? `. ${article.content}` : ""}`,
-        );
+        // Single AI call produces headline/summary/keyFacts/detailed together
+        // so the model can keep them distinct (services/content/).
+        if (aiCalls >= config.AI_DAILY_LIMIT) {
+          throw new Error("AI daily limit reached; using deterministic fallback");
+        }
+        aiCalls += 1;
+        const content = await this._summarizeWithRetry({
+          source: article.source,
+          section: article.section,
+          title: article.headline,
+          // RSS feeds rarely carry the article body, so the input is usually
+          // the headline plus the feed snippet. sourceWordCount on the result
+          // records what the model actually saw.
+          text: `${article.headline}. ${article.summary}${
+            article.content ? `. ${article.content}` : ""
+          }`,
+        });
 
         summarized.push({
           ...article,
-          gist: aiResult.gist,
-          summary: aiResult.summary,
-          bulletPoints: aiResult.bulletPoints,
-          keyFacts: aiResult.keyFacts || [],
-          tags: aiResult.tags,
-          subtopics: aiResult.subtopics,
-          aiCategory: aiResult.category,
+          // v2 content model: no separate subtitle. The summary lives in the
+          // Overview tab; an empty gist keeps the header from showing a deck
+          // that duplicates the summary's first sentence.
+          gist: "",
+          headline: content.headline || article.headline,
+          summary: content.summary,
+          bulletPoints: content.keyFacts || [],
+          keyFacts: content.keyFacts || [],
+          tags: content.tags,
+          subtopics: content.subtopics,
+          aiCategory: content.category,
+          promptVersion: content.promptVersion,
+          sourceWordCount: content.sourceWordCount,
+          modelUsed: content.modelUsed,
         });
+        pendingBatch.push(summarized[summarized.length - 1]);
+        if (onBatch && pendingBatch.length >= PIPELINE_CONFIG.BATCH_SIZE) {
+          await onBatch(pendingBatch);
+          pendingBatch = [];
+        }
       } catch (error) {
         // If AI fails, fall back to rule-based summary from RSS description
         this.logger.warn("AI summarization failed, using fallback", {
@@ -282,6 +326,10 @@ class NewsProcessor {
           error: error.message,
         });
 
+        // Deterministic fallback. The snippet IS the overview, so it is used
+        // as the summary - but keyFacts must never repeat it. If the snippet
+        // is too thin to summarize, say so with one honest sentence instead
+        // of padding.
         const sentences = article.summary
           .split(/(?<=[.!?])\s+/)
           .map((sentence) => sentence.trim())
@@ -292,23 +340,33 @@ class NewsProcessor {
             ? shortSummary
             : `${article.headline}. Read the original report at ${article.source}.`;
         const usableSummary = fallbackSummary.slice(0, 1000);
-        const keyFacts = sentences
-          .filter((sentence) => sentence.toLowerCase() !== article.headline.toLowerCase())
-          .slice(0, 5);
 
         summarized.push({
           ...article,
-          gist: (sentences[0] || article.headline).split(/\s+/).slice(0, 25).join(" "),
+          gist: "",
           summary: usableSummary,
-          bulletPoints: keyFacts,
-          keyFacts,
+          bulletPoints: [],
+          keyFacts: [],
           tags: this._deriveTags(`${article.headline} ${article.summary}`),
           aiCategory: null,
+          promptVersion: null,
+          sourceWordCount: countWords(
+            `${article.headline} ${article.summary}`,
+          ),
         });
+        pendingBatch.push(summarized[summarized.length - 1]);
+        if (onBatch && pendingBatch.length >= PIPELINE_CONFIG.BATCH_SIZE) {
+          await onBatch(pendingBatch);
+          pendingBatch = [];
+        }
       }
     }
 
-    return classifyArticles(summarized);
+    if (onBatch && pendingBatch.length) {
+      await onBatch(pendingBatch);
+    }
+
+    return onBatch ? summarized : classifyArticles(summarized);
   }
 
   _deriveTags(text) {
@@ -318,21 +376,22 @@ class NewsProcessor {
       ["Economy", ["economy", "budget", "market", "bank", "payment", "trade"]],
       ["Defense", ["defence", "defense", "military", "army", "navy", "missile"]],
       ["Science", ["science", "technology", "tech", "isro", "space", "semiconductor"]],
-      ["International", ["international", "foreign", "bilateral", "un", "global"]],
+      ["International", ["international", "foreign", "bilateral", "global"]],
     ];
     const tags = rules
-      .filter(([, keywords]) => keywords.some((keyword) => lower.includes(keyword)))
+      .filter(([, keywords]) =>
+        keywords.some((keyword) => new RegExp(`\\b${keyword}\\b`, "i").test(lower)),
+      )
       .map(([tag]) => tag);
-    return tags.length ? tags.slice(0, 3) : ["Polity"];
+    return tags.length ? tags.slice(0, 3) : ["International"];
   }
 
   /**
-   * Summarize with retry logic
+   * Generate content with retry logic
    */
-  async _summarizeWithRetry(articleText, attempt = 1) {
+  async _summarizeWithRetry(input, attempt = 1) {
     try {
-      const result = await aiService.summarizeArticle(articleText);
-      return result;
+      return await generateArticleContent(input);
     } catch (error) {
       // A provider-wide 429 will affect every remaining article in this run.
       // Retrying it only delays the deterministic fallback and keeps the
@@ -348,7 +407,7 @@ class NewsProcessor {
         await new Promise((resolve) =>
           setTimeout(resolve, PIPELINE_CONFIG.RETRY_DELAY),
         );
-        return this._summarizeWithRetry(articleText, attempt + 1);
+        return this._summarizeWithRetry(input, attempt + 1);
       }
       throw error;
     }
@@ -371,15 +430,20 @@ class NewsProcessor {
           aiCategory: article.aiCategory,
         });
 
-        // This is the deterministic short summary created from the RSS
-        // description; source text is not stored.
+        // This is the structured content produced by the content pipeline;
+        // source text is never stored.
         const newsData = {
           source: article.source || "The Hindu",
           headline: article.headline,
-          gist: article.gist || article.headline,
+          // v2: no subtitle. Empty gist keeps the header from showing a deck
+          // that duplicates the summary.
+          gist: article.gist || "",
           summary: article.summary,
           bulletPoints: article.keyFacts || article.bulletPoints || [],
           keyFacts: article.keyFacts || article.bulletPoints || [],
+          promptVersion: article.promptVersion || null,
+          sourceWordCount: article.sourceWordCount,
+          ...(article.sourceTier ? { sourceTier: article.sourceTier } : {}),
           tags: article.tags?.length
             ? article.tags
             : (article.topicHints ?? article.syllabusHints ?? []).length
@@ -389,9 +453,10 @@ class NewsProcessor {
           sourceId: article.sourceId,
           feedId: article.feedId,
           publishedAt: article.publishedAt,
+          publishedDayKey: article.publishedDayKey || istDayKey(article.publishedAt),
           summaryStatus: "SUMMARIZED",
           summarizedAt: new Date(),
-          modelUsed: article.aiCategory ? "gemini-3.8-flash" : "rule-based",
+          modelUsed: article.modelUsed || (article.aiCategory ? "unknown-ai" : "rule-based"),
           category,
           topic: article.topic,
           secondaryTopics: article.secondaryTopics || [],
@@ -399,6 +464,21 @@ class NewsProcessor {
           topicConfidence: article.topicConfidence,
           subtopics: article.subtopics || [],
           url: article.url,
+          // Detailed narrative. The ingestion call only sees the RSS snippet,
+          // so it produces a narrative only when that snippet was already FULL
+          // text (rare). Otherwise leave detailedStatus at its NONE default so
+          // the dedicated detailed path - which fetches the full article page -
+          // can still attempt it for top-N and on-demand requests. UNAVAILABLE
+          // is set by that path when the full text is genuinely blocked/thin,
+          // never here, or we would prevent a legitimate attempt.
+          ...(article.detailed
+            ? {
+                detailedSummary: article.detailed,
+                detailedStatus: "DONE",
+                detailedConfidence: article.confidence,
+                detailedGeneratedAt: new Date(),
+              }
+            : {}),
           // `date` is the ingestion day used by the dashboard's current-day
           // query. Keep the publisher timestamp separately in `publishedAt`;
           // RSS feeds commonly retain items published before today.
@@ -436,12 +516,15 @@ class NewsProcessor {
   async _cleanupOldNews() {
     try {
       const now = new Date();
-      const { startOfUtcDay } = utcDayRange(now);
-      // Remove articles whose date is outside the current UTC day
+      const range = istDayRange(now);
       const result = await News.deleteMany({
-        date: {
-          $lt: startOfUtcDay,
-        },
+        $or: [
+          { publishedDayKey: { $exists: true, $ne: istDayKey(now) } },
+          {
+            publishedDayKey: { $exists: false },
+            publishedAt: { $lt: range.$gte },
+          },
+        ],
       });
       this.logger.info(`🧹 Cleaned up ${result.deletedCount} old news articles`);
       return result.deletedCount;

@@ -23,14 +23,14 @@ export const newsAPI = {
   getAll: (params) => apiClient.get("/news", { params }),
   getById: (id) => apiClient.get(`/news/${id}`),
   generateDetailed: (id) =>
-    apiClient.post(`/news/${id}/detailed`, null, { timeout: 90000 }),
+    // Express's strict JSON parser rejects a primitive `null` body. The
+    // detailed endpoint needs no input, so send an empty JSON object instead.
+    apiClient.post(`/news/${id}/detailed`, {}, { timeout: 90000 }),
   getByTag: (tag, params) => apiClient.get(`/news/tag/${tag}`, { params }),
   getBySource: (source, params) =>
     apiClient.get(`/news/source/${encodeURIComponent(source)}`, { params }),
   search: (q, params) => apiClient.get("/news/search", { params: { q, ...params } }),
   getStats: () => apiClient.get("/news/stats/overview"),
-  // Requires authentication; runs the ingest pipeline in the background.
-  fetchDaily: (params) => apiClient.get("/news/fetch-daily", { params }),
   create: (data) => apiClient.post("/news", data),
 };
 

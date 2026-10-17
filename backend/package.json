@@ -12,8 +12,10 @@
     "topics:migrate": "node scripts/migrate-topics.mjs",
     "topics:backfill": "node scripts/topics-backfill.mjs",
     "topics:report": "node scripts/topics-report.mjs",
-    "topics:sample": "node scripts/topics-sample.mjs"
-    ,"content:backfill": "node scripts/backfill-content-fields.mjs"
+    "topics:sample": "node scripts/topics-sample.mjs",
+    "topics:review": "node scripts/topics-review.mjs",
+    "content:backfill": "node scripts/backfill-content-fields.mjs",
+    "content:backfill-prompt": "node scripts/backfill-prompt-version.mjs"
   },
   "keywords": [
     "news",
@@ -30,12 +32,14 @@
     "dotenv": "^16.0.0",
     "express": "^4.18.0",
     "express-rate-limit": "^7.5.1",
+    "helmet": "^8.1.0",
     "jsdom": "^30.1.2",
     "jsonwebtoken": "^9.0.0",
     "mongoose": "^7.0.0",
     "morgan": "^1.10.0",
     "robots-parser": "^3.0.1",
-    "rss-parser": "^3.13.0"
+    "rss-parser": "^3.13.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "mongodb-memory-server": "^11.3.0",

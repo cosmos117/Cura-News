@@ -1,8 +1,8 @@
 /**
  * AI Summarization Routes
- * Endpoints for article summarization and analysis using OpenAI
+ * Endpoints for article summarization and analysis using the configured AI provider
  *
- * Every endpoint here bills a real OpenAI request, so all of them require
+ * Every endpoint here bills a real provider request, so all of them require
  * authentication and are rate limited. They were previously fully anonymous
  * with no throttle, so a scripted loop could exhaust the API budget in minutes.
  */
@@ -66,7 +66,7 @@ router.post("/quick-analyze", protect, aiLimiter, quickAnalyzeArticle);
 /**
  * GET /api/ai/health
  * Reports whether the AI key is configured. This is a configuration check, not
- * a live probe - it does not call OpenAI.
+ * a live probe - it does not call an AI provider.
  */
 router.get("/health", checkAIServiceHealth);
 

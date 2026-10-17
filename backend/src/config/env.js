@@ -28,8 +28,7 @@ export const config = {
   JWT_EXPIRE: getEnv("JWT_EXPIRE", "7d"),
 
   // AI providers. These are the only providers any code path calls, via
-  // generateStructured (primary + fallback). OPENAI_* used to sit here and is
-  // intentionally gone: the OpenAI request bodies it fed were dead code.
+  // generateStructured (primary + fallback).
   GEMINI_API_KEY: getEnv("GEMINI_API_KEY", ""),
   // Model IDs verified against the live APIs on 2026-10-05: both return 200
   // with these keys. Older defaults (gemini-2.0-flash, llama-3.3-70b-versatile)
@@ -44,14 +43,17 @@ export const config = {
   // Comma-separated list of allowed origins. Default matches the Vite dev
   // server port declared in frontend/vite.config.js.
   CORS_ORIGIN: getEnv("CORS_ORIGIN", "http://localhost:3000"),
+  CRON_SECRET: getEnv("CRON_SECRET", ""),
+  TRUST_PROXY: parseInt(getEnv("TRUST_PROXY", "1"), 10),
 
   // Detailed summaries
   DETAILED_TOP_N: parseInt(getEnv("DETAILED_TOP_N", "30"), 10),
   MIN_TEXT_CHARS: parseInt(getEnv("MIN_TEXT_CHARS", "800"), 10),
-  INPUT_MAX_CHARS: parseInt(getEnv("INPUT_MAX_CHARS", "12000"), 10),
+  INPUT_MAX_CHARS: parseInt(getEnv("INPUT_MAX_CHARS", "30000"), 10),
   AI_DAILY_LIMIT: parseInt(getEnv("AI_DAILY_LIMIT", "100"), 10),
   AI_DELAY_MS: parseInt(getEnv("AI_DELAY_MS", "500"), 10),
   FETCH_TIMEOUT_MS: parseInt(getEnv("FETCH_TIMEOUT_MS", "10000"), 10),
+  MIN_ARTICLES_BEFORE_CLEANUP: parseInt(getEnv("MIN_ARTICLES_BEFORE_CLEANUP", "5"), 10),
 
   // Derived flags
   isDevelopment: getEnv("NODE_ENV", "development") === "development",
@@ -63,10 +65,9 @@ export const config = {
 
 // Validate critical env vars in production
 if (config.isProduction) {
-  // OPENAI_API_KEY / NEWS_API_KEY are intentionally NOT checked here. No code
-  // path calls OpenAI or NewsAPI any more (see generateStructured for the live
-  // Gemini -> Groq chain, and rssFetcher for ingestion), so warning about them
-  // would imply a requirement that does not exist. The AI key check lives in
+  // Provider keys are intentionally not checked here. The live provider
+  // chain performs its own configuration check, so warning about absent
+  // unused keys would imply a requirement that does not exist. The AI key check lives in
   // server.js so it reports once, with the rest of the boot output.
 
   const jwtSecret = config.JWT_SECRET;

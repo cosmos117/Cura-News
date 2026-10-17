@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { config } from "../src/config/env.js";
 import News from "../src/models/News.js";
 import { classifyArticles } from "../src/services/topicClassifier.js";
+import { enabledFeeds } from "../src/config/feeds.js";
 
 const force = process.argv.includes("--force");
 
@@ -16,6 +17,9 @@ const force = process.argv.includes("--force");
  * lets a single failed batch still leave the rest classified.
  */
 const BATCH_SIZE = 25;
+const hintsByFeed = new Map(
+  enabledFeeds().map((feed) => [feed.feedId, feed.topicHints || []]),
+);
 
 try {
   await mongoose.connect(config.MONGO_URI);
@@ -25,7 +29,14 @@ try {
   // fields were nested inside `tags` and silently dropped. Match both.
   const query = force
     ? { isPublished: true }
-    : { isPublished: true, $or: [{ topic: null }, { topic: { $exists: false } }] };
+    : {
+        isPublished: true,
+        $or: [
+          { topic: "other" },
+          { topic: null },
+          { topic: { $exists: false } },
+        ],
+      };
 
   const articles = await News.find(query).lean();
   console.log(`Classifying ${articles.length} articles${force ? " (forced)" : ""}...`);
@@ -42,6 +53,7 @@ try {
         summary: a.summary,
         section: a.section,
         source: a.source,
+        topicHints: hintsByFeed.get(a.feedId) || [],
       })),
     );
 

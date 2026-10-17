@@ -1,5 +1,6 @@
 import express from "express";
 import morgan from "morgan";
+import helmet from "helmet";
 import { config } from "./config/env.js";
 import { corsMiddleware } from "./middleware/corsMiddleware.js";
 import { apiLimiter } from "./middleware/rateLimiter.js";
@@ -7,15 +8,18 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import testRoutes from "./routes/testRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import newsRoutes from "./routes/newsRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 import aiRoutes from "./routes/aiRoutes.js";
 //
 
 const app = express();
+app.set("trust proxy", config.TRUST_PROXY);
 
 // ====== MIDDLEWARE ======
 
 // CORS - Handle cross-origin requests
 app.use(corsMiddleware());
+app.use(helmet());
 
 // Body Parser - Parse incoming JSON requests.
 // 10MB is far more than any legitimate payload (the largest is a 10,000-char
@@ -41,13 +45,16 @@ app.get("/health", (req, res) => {
 // ====== ROUTES ======
 
 // Test routes
-app.use("/api", testRoutes);
+if (!config.isProduction) {
+  app.use("/api", testRoutes);
+}
 
 // Auth routes
 app.use("/api/auth", authRoutes);
 
 // News routes
 app.use("/api/news", newsRoutes);
+app.use("/api/admin", adminRoutes);
 
 // AI summarization routes
 app.use("/api/ai", aiRoutes);

@@ -94,7 +94,7 @@ process.on("uncaughtException", (error) => {
 // Handle unhandled promise rejections
 process.on("unhandledRejection", (reason) => {
   console.error("❌ Unhandled Rejection:", reason);
-  shutdown("unhandledRejection");
+  console.error("⚠️  Continuing after unhandled rejection");
 });
 
 export default server;
