@@ -143,10 +143,16 @@ const WEATHER_CODES = {
  * No API key required.
  */
 function WeatherWidget() {
-  const [selectedCity, setSelectedCity] = useState(CITIES[0]);
+  const stored = localStorage.getItem("curaWeatherCity");
+  const defaultCity = CITIES.find((c) => c.name === stored) || CITIES[0];
+  const [selectedCity, setSelectedCity] = useState(defaultCity);
   const [weather, setWeather] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem("curaWeatherCity", selectedCity.name);
+  }, [selectedCity.name]);
 
   useEffect(() => {
     let cancelled = false;
