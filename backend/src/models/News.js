@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { utcDayRange } from "../utils/date.js";
+import { istDayKey, istDayRange } from "../utils/date.js";
 import { NEWS_CATEGORIES, DEFAULT_CATEGORY } from "../utils/category.js";
 import { TOPIC_IDS, TOPIC_LABELS } from "../config/topics.js";
 
@@ -36,6 +36,11 @@ const newsSchema = new mongoose.Schema(
     publishedAt: {
       type: Date,
       default: Date.now,
+      index: true,
+    },
+    publishedDayKey: {
+      type: String,
+      match: /^\d{4}-\d{2}-\d{2}$/,
       index: true,
     },
     section: {
@@ -110,6 +115,11 @@ const newsSchema = new mongoose.Schema(
       default: "NONE",
       index: true,
     },
+    detailedLockedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
     detailedGeneratedAt: {
       type: Date,
       default: null,
@@ -121,6 +131,36 @@ const newsSchema = new mongoose.Schema(
     detailSourceType: {
       type: String,
       enum: DETAIL_SOURCE_TYPES,
+    },
+    /* ---- Content model v2 (see services/content/prompts.js) ---- */
+    // Version of the prompt that produced headline/summary/keyFacts/detailed.
+    // Used by scripts/backfill-content-fields.mjs to stay idempotent.
+    promptVersion: {
+      type: String,
+      trim: true,
+    },
+    // Word count of the source text the model actually received (debugging).
+    sourceWordCount: {
+      type: Number,
+      min: 0,
+    },
+    // Length tier of that source text (FULL/PARTIAL/THIN). Decides whether a
+    // detailed narrative is ever expected for this article.
+    sourceTier: {
+      type: String,
+      enum: ["FULL", "PARTIAL", "THIN"],
+    },
+    // Trigram overlap between detailed and summary after validation (0-1).
+    overlapScoreSummaryDetailed: {
+      type: Number,
+      min: 0,
+      max: 1,
+    },
+    // Number of key facts dropped by the overlap validator (audit trail).
+    droppedKeyFacts: {
+      type: Number,
+      min: 0,
+      default: 0,
     },
     bulletPoints: {
       type: [String],
@@ -311,12 +351,17 @@ newsSchema.query.byDateRange = function (startDate, endDate) {
 /**
  * Query helper: Only get today's news
  *
- * Uses UTC boundaries to match the UTC timestamps from NewsAPI. Server-local
+ * Uses the published day key derived from RSS timestamps. Server-local
  * midnight shifted the window on any non-UTC deployment.
  */
 newsSchema.query.today = function () {
   const now = new Date();
-  return this.where({ date: utcDayRange(now) });
+  return this.where({
+    $or: [
+      { publishedDayKey: istDayKey(now) },
+      { publishedDayKey: { $exists: false }, publishedAt: istDayRange(now) },
+    ],
+  });
 };
 
 const News = mongoose.model("News", newsSchema);

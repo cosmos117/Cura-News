@@ -1,11 +1,8 @@
 /**
  * Ingestion scheduler.
  *
- * The pipeline was only ever started by a human hitting
- * `GET /api/news/fetch-daily`. Nothing ran it on a timer, so the article list
- * froze at whatever was last fetched and the dashboard showed 0 articles for the
- * whole day after UTC midnight rolled the day window forward - even though the
- * feeds were healthy and full of new items.
+ * The pipeline is also exposed through the protected admin ingest endpoint.
+ * This scheduler keeps ingestion moving continuously through the day.
  *
  * This runs the same pipeline on a fixed interval so articles accumulate
  * continuously through the day. It deliberately reuses newsProcessor's existing

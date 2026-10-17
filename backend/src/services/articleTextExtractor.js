@@ -19,29 +19,29 @@ const getRobotsUrl = (articleUrl) => {
 };
 
 export async function extractArticleText(articleUrl) {
-  if (!articleUrl || !/^https?:\/\//i.test(articleUrl)) {
-    return unavailable("Article URL is missing or invalid");
-  }
-
-  let robotsResponse;
   try {
-    robotsResponse = await axios.get(getRobotsUrl(articleUrl), {
-      timeout: config.FETCH_TIMEOUT_MS,
-      headers: { "User-Agent": USER_AGENT },
-      validateStatus: (status) => status === 200 || status === 404,
-    });
-  } catch (error) {
-    return unavailable(`Could not verify robots.txt: ${error.message}`);
-  }
-
-  if (robotsResponse.status === 200) {
-    const robots = robotsParser(getRobotsUrl(articleUrl), robotsResponse.data);
-    if (!robots.isAllowed(articleUrl, USER_AGENT)) {
-      return unavailable("Article access is disallowed by robots.txt");
+    if (!articleUrl || !/^https?:\/\//i.test(articleUrl)) {
+      return unavailable("Article URL is missing or invalid");
     }
-  }
 
-  try {
+    let robotsResponse;
+    try {
+      robotsResponse = await axios.get(getRobotsUrl(articleUrl), {
+        timeout: config.FETCH_TIMEOUT_MS,
+        headers: { "User-Agent": USER_AGENT },
+        validateStatus: (status) => status === 200 || status === 403 || status === 404,
+      });
+    } catch {
+      robotsResponse = null;
+    }
+
+    if (robotsResponse?.status === 200) {
+      const robots = robotsParser(getRobotsUrl(articleUrl), robotsResponse.data);
+      if (!robots.isAllowed(articleUrl, USER_AGENT)) {
+        return unavailable("Article access is disallowed by robots.txt");
+      }
+    }
+
     const response = await axios.get(articleUrl, {
       timeout: config.FETCH_TIMEOUT_MS,
       headers: {

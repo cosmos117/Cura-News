@@ -1,6 +1,6 @@
 import express from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { detailedLimiter, pipelineLimiter } from "../middleware/rateLimiter.js";
+import { detailedLimiter } from "../middleware/rateLimiter.js";
 import {
   getTodayNews,
   getNewsByID,
@@ -9,7 +9,6 @@ import {
   getNewsBySource,
   searchNews,
   getNewsStats,
-  fetchDailyNews,
   generateDetailedNews,
 } from "../controllers/newsController.js";
 
@@ -19,10 +18,8 @@ const router = express.Router();
  * News Routes
  * /api/news/*
  *
- * ROUTE ORDER MATTERS: every single-segment path below (/search,
- * /fetch-daily, /stats) must be registered BEFORE the /:id catch-all, or
- * Express will match them as an :id and return 404. Previously `/search` and
- * `/fetch-daily` were both shadowed by `/:id` and therefore unreachable.
+ * ROUTE ORDER MATTERS: every single-segment path below (/search, /stats) must
+ * be registered BEFORE the /:id catch-all.
  */
 
 /**
@@ -70,21 +67,33 @@ router.get("/tag/:tagName", getNewsByTag);
  */
 router.get("/source/:sourceName", getNewsBySource);
 
-/**
- * GET /api/news/fetch-daily
- * Trigger the fetch -> filter -> summarize -> store pipeline.
- *
- * Protected + rate limited: each run issues ~20 NewsAPI requests and up to
- * ~115 billed OpenAI requests. The processor also holds an in-flight lock so
- * concurrent invocations cannot overlap.
- *
- * Query Parameters:
- * - skipAIFilter: "true" to use the keyword filter instead of per-article
- *   AI relevance analysis (cheaper, less precise).
- */
-router.get("/fetch-daily", protect, pipelineLimiter, fetchDailyNews);
+router.all("/fetch-daily", (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "This endpoint was replaced by POST /api/admin/ingest",
+  });
+});
 
-router.post("/:id/detailed", protect, detailedLimiter, generateDetailedNews);
+router.post(
+  "/:id/detailed",
+  protect,
+  detailedLimiter,
+  generateDetailedNews,
+  (error, req, res, next) => {
+    if (error.statusCode || res.headersSent) return next(error);
+
+    console.error("Unhandled detailed summary route error:", {
+      articleId: req.params.id,
+      message: error.message,
+      stack: error.stack,
+    });
+    return res.status(503).json({
+      success: false,
+      message:
+        "Detailed summary could not be generated right now. Please try again.",
+    });
+  },
+);
 
 /**
  * POST /api/news

@@ -12,7 +12,9 @@
 
 export const NEWS_CATEGORIES = [
   "Politics & Governance",
+  "Opinion & Editorial",
   "Economy & Business",
+  "Agriculture & Rural",
   "World Affairs",
   "Defence & Security",
   "Law & Judiciary",
@@ -20,11 +22,18 @@ export const NEWS_CATEGORIES = [
   "Environment & Climate",
   "Health",
   "Education & Society",
+  "Culture & Lifestyle",
   "Sports",
   "Entertainment",
   "Other",
 ];
 export const TOPIC_LABELS = NEWS_CATEGORIES;
+export const TOPIC_LABEL_BY_ID = Object.fromEntries(
+  NEWS_CATEGORIES.map((label) => [
+    label.toLowerCase().replaceAll(" & ", "-").replaceAll(" ", "-"),
+    label,
+  ]),
+);
 
 export const NEWS_TAGS = [
   "Polity",

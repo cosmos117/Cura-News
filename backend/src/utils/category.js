@@ -9,7 +9,7 @@
  *   4. "Other"            - so every article is always categorised.
  *
  * The AI step is a genuine fallback rather than the primary path: calling
- * OpenAI for every article costs money and is slower, and the feed label plus
+ * An AI provider for every article costs money and is slower, and the feed label plus
  * keyword rules already resolve the large majority of articles.
  */
 
@@ -28,12 +28,12 @@ const VALID_CATEGORIES = new Set(NEWS_CATEGORIES);
 export const DEFAULT_CATEGORY = "Other";
 
 /**
- * NewsAPI (and most RSS feeds) use their own category vocabulary. Mapping is
+ * RSS feeds use their own category vocabulary. Mapping is
  * explicit rather than string-matched so an unmapped feed category falls
  * through to the keyword rules instead of being force-fit.
  */
 const FEED_CATEGORY_MAP = {
-  // NewsAPI /newsapi.org values
+  // Common publisher feed values
   business: "Business",
   entertainment: "Entertainment",
   sports: "Sports",
@@ -181,7 +181,7 @@ const asCategory = (value) => {
 
 /**
  * Resolve a category from the feed's own category label.
- * @param {string} feedCategory - e.g. NewsAPI's "technology"
+ * @param {string} feedCategory - e.g. a publisher's "technology" label
  * @returns {string|null} - Category, or null when unmapped/too broad
  */
 export const categoryFromFeed = (feedCategory) => {

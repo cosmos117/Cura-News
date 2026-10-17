@@ -10,6 +10,9 @@ import { config } from "../config/env.js";
 const env = config;
 const AI_RATE_LIMIT_COOLDOWN_MS = 60_000;
 let aiRateLimitedUntil = 0;
+let aiRateLimitStrikes = 0;
+const AI_CIRCUIT_BREAKER_THRESHOLD = 3;
+const AI_CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60_000;
 
 /**
  * System prompt - Instructs the AI to summarize news clearly for general readers
@@ -213,7 +216,12 @@ export async function generateStructured({
     error?.response?.status === 429 || error?.status === 429;
 
   const markRateLimited = () => {
-    aiRateLimitedUntil = Date.now() + AI_RATE_LIMIT_COOLDOWN_MS;
+    aiRateLimitStrikes += 1;
+    aiRateLimitedUntil =
+      Date.now() +
+      (aiRateLimitStrikes >= AI_CIRCUIT_BREAKER_THRESHOLD
+        ? AI_CIRCUIT_BREAKER_COOLDOWN_MS
+        : AI_RATE_LIMIT_COOLDOWN_MS);
   };
 
   const callGroq = async () => {
@@ -288,22 +296,80 @@ export async function generateStructured({
   }
 
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  return JSON.parse((fenced ? fenced[1] : content).trim());
+  const parsed = parseJsonLenient(fenced ? fenced[1] : content);
+  Object.defineProperty(parsed, "__aiMeta", {
+    value: {
+      provider: env.AI_PROVIDER.toLowerCase() === "groq" ? "groq" : "gemini",
+      modelUsed:
+        env.AI_PROVIDER.toLowerCase() === "groq"
+          ? env.GROQ_MODEL
+          : env.GEMINI_MODEL,
+    },
+    enumerable: false,
+  });
+  aiRateLimitStrikes = 0;
+  return parsed;
+}
+
+/**
+ * Parse JSON, repairing raw control characters that appear inside string
+ * literals. Gemini runs in JSON mode, but the Groq fallback does not, and a
+ * model that emits a real newline inside a "detailed" paragraph produces
+ * unterminated-string errors. This scanner walks the text, tracks whether it
+ * is inside a string literal, and escapes control characters only there -
+ * leaving whitespace between tokens untouched.
+ */
+function parseJsonLenient(text) {
+  const raw = String(text || "").trim();
+  try {
+    return JSON.parse(raw);
+  } catch (initialError) {
+    let out = "";
+    let inString = false;
+    let escaped = false;
+    for (const ch of raw) {
+      if (inString) {
+        if (escaped) {
+          out += ch;
+          escaped = false;
+        } else if (ch === "\\") {
+          out += ch;
+          escaped = true;
+        } else if (ch === '"') {
+          out += ch;
+          inString = false;
+        } else if (ch === "\n") {
+          out += "\\n";
+        } else if (ch === "\r") {
+          out += "\\r";
+        } else if (ch === "\t") {
+          out += "\\t";
+        } else if (ch.charCodeAt(0) < 0x20) {
+          out += `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
+        } else {
+          out += ch;
+        }
+      } else {
+        if (ch === '"') {
+          inString = true;
+        }
+        out += ch;
+      }
+    }
+    return JSON.parse(out);
+  }
 }
 
 /**
  * Structured summarization via the configured provider chain.
  *
- * The name is historical. This no longer calls OpenAI directly: it delegates to
- * generateStructured (Gemini primary, Groq fallback). An earlier edit made this
- * a one-line delegation but left the entire OpenAI request body below the
- * `return` in place, where it was unreachable - and still referenced the
- * undefined `apiKey`, so it would have thrown had it ever been reached.
+ * The name is historical. It delegates to generateStructured, which uses the
+ * configured provider and fallback chain.
  *
  * @param {string} userMessage - User's article text
  * @returns {Promise<object>} Parsed JSON response
  */
-async function callOpenAIAPI(userMessage) {
+async function callConfiguredAI(userMessage) {
   return generateStructured({
     systemPrompt: SYSTEM_PROMPT,
     userPrompt: `Please analyze this news article and return the CURA JSON schema.
@@ -336,8 +402,7 @@ export async function summarizeArticle(articleText) {
   }
 
   try {
-    // Call OpenAI API
-    const result = await callOpenAIAPI(articleText);
+    const result = await callConfiguredAI(articleText);
 
     // Validate response
     const validation = validateResponse(result);
@@ -453,9 +518,7 @@ Respond with JSON:
 Do NOT include markdown formatting.`;
 
   // Routed through generateStructured so this honours AI_PROVIDER and the
-  // Gemini -> Groq fallback like every other AI call. It called OpenAI
-  // directly, so it threw "OPENAI_API_KEY not configured" whenever only
-  // Gemini/Groq were set - i.e. in the documented setup.
+  // Gemini -> Groq fallback like every other AI call.
   try {
     return await generateStructured({
       systemPrompt,

@@ -1,6 +1,7 @@
 import Parser from "rss-parser";
 import { config } from "../config/env.js";
 import { enabledFeeds } from "../config/feeds.js";
+import { istDayKey } from "../utils/date.js";
 
 const cleanText = (value = "") =>
   String(value)
@@ -30,6 +31,7 @@ const normalize = (item, feed) => {
   const url = normalizeUrl(item.link);
   if (!headline || !url) return null;
 
+  const publishedAt = new Date(item.isoDate || item.pubDate || Date.now());
   return {
     headline,
     summary,
@@ -41,7 +43,8 @@ const normalize = (item, feed) => {
     topicHints: feed.topicHints ?? feed.syllabusHints ?? [],
     feedPriority: feed.priority,
     url,
-    publishedAt: new Date(item.isoDate || item.pubDate || Date.now()),
+    publishedAt,
+    publishedDayKey: istDayKey(publishedAt),
     rssCategory: item.categories?.[0] || null,
   };
 };
@@ -50,6 +53,8 @@ export async function fetchRssArticles() {
   const feeds = enabledFeeds();
   const articles = [];
   const failures = [];
+  let skippedOutsideRetention = 0;
+  const todayKey = istDayKey();
 
   for (const feed of feeds) {
     const parser = new Parser({
@@ -58,9 +63,15 @@ export async function fetchRssArticles() {
     });
     try {
       const result = await parser.parseURL(feed.url);
-      articles.push(
-        ...result.items.map((item) => normalize(item, feed)).filter(Boolean),
-      );
+      for (const item of result.items) {
+        const article = normalize(item, feed);
+        if (!article) continue;
+        if (article.publishedDayKey !== todayKey) {
+          skippedOutsideRetention += 1;
+          continue;
+        }
+        articles.push(article);
+      }
     } catch (error) {
       failures.push({ feedId: feed.feedId, source: feed.source, error: error.message });
       console.error(`RSS fetch failed for ${feed.source}: ${error.message}`);
@@ -80,5 +91,5 @@ export async function fetchRssArticles() {
     throw new Error(`All RSS feeds failed. First error: ${failures[0].error}`);
   }
 
-  return unique;
+  return { articles: unique, skippedOutsideRetention };
 }
