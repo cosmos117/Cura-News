@@ -8,6 +8,7 @@
 import { MongoMemoryServer } from "mongodb-memory-server";
 import assert from "node:assert/strict";
 import axios from "axios";
+import { formatDetailedText } from "../src/utils/formatDetailedText.js";
 
 let mongod;
 let baseUrl;
@@ -47,6 +48,42 @@ const api = async (path, { method = "GET", token, body, headers = {} } = {}) => 
 };
 
 async function main() {
+  await check("detailed text formatter repairs spacing and sentence-safe paragraphs", async () => {
+    const result = formatDetailedText(
+      "The RSS (RSS)concluded its celebrations. It has grown rapidly while one\nof the 32 organisations it inspired expanded. Its legacy remains contested. Supporters cite service. Critics cite exclusion. The debate continues.",
+    );
+    assert.equal(result.valid, true);
+    assert.match(result.text, /\(RSS\) concluded/);
+    assert.equal(result.paragraphs.length, 3);
+    result.paragraphs.forEach((paragraph) => assert.match(paragraph, /[.!?]["'»”’)\]]?$/));
+  });
+
+  await check("detailed text formatter preserves decimals and abbreviations", async () => {
+    const result = formatDetailedText(
+      "The report cites Rs.5.2 crore and 3.5% growth. U.S. officials referred to e.g. No. 1 priorities. A. P. J. Abdul Kalam remains widely remembered.",
+    );
+    assert.equal(result.valid, true);
+    assert.match(result.text, /Rs\.5\.2 crore/);
+    assert.match(result.text, /3\.5%/);
+    assert.match(result.text, /U\.S\./);
+    assert.match(result.text, /e\.g\./);
+    assert.match(result.text, /No\. 1/);
+    assert.match(result.text, /A\. P\. J\. Abdul Kalam/);
+  });
+
+  await check("detailed text formatter rejects truncated output", async () => {
+    assert.deepEqual(formatDetailedText("The final sentence is incomplete"), {
+      valid: false,
+      reason: "truncated",
+    });
+  });
+
+  await check("detailed text formatter handles short text", async () => {
+    const result = formatDetailedText("A short sentence. Another one.");
+    assert.equal(result.valid, true);
+    assert.ok(result.paragraphs.length >= 1 && result.paragraphs.length <= 2);
+  });
+
   mongod = await MongoMemoryServer.create();
   process.env.MONGO_URI = mongod.getUri("cura-news-test");
   process.env.JWT_SECRET = "test-secret-that-is-definitely-long-enough-32";

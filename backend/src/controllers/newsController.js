@@ -403,6 +403,26 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
         message: error.message,
       });
 
+      if (error.statusCode === 429) {
+        const available = await News.findByIdAndUpdate(
+          id,
+          {
+            $set: {
+              detailedStatus: "NONE",
+              detailedLockedAt: null,
+              lastError: "AI providers are temporarily rate-limited",
+            },
+          },
+          { new: true, runValidators: true },
+        );
+        if (!available) throw new AppError("News article not found", 404);
+        return res.status(429).json({
+          success: false,
+          message: "AI providers are temporarily rate-limited. Please try again shortly.",
+          data: available.getPublicNews(),
+        });
+      }
+
       const failed = await News.findByIdAndUpdate(
         id,
         {
@@ -410,7 +430,7 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
             detailedStatus: "FAILED",
             detailedLockedAt: null,
             detailSourceType: "SNIPPET_ONLY",
-            lastError: "Detailed summary generation failed",
+            lastError: String(error.message || "Detailed summary generation failed").slice(0, 500),
           },
           $unset: {
             detailedSummary: 1,

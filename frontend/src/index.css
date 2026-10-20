@@ -1914,6 +1914,7 @@ fieldset legend {
   line-height: 1.7;
   color: var(--gray-800);
   max-width: 100ch;
+  overflow-wrap: break-word;
 }
 
 /* ========================= RESPONSIVE ========================= */
