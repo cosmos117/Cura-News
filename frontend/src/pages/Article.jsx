@@ -114,10 +114,11 @@ export default function Article() {
           setArticle(err.response.data.data);
         }
         setActionError(
-          getErrorMessage(
-            err,
-            "Detailed summary could not be generated right now. Please try again.",
-          ),
+          err.response?.data?.data?.lastError ||
+            getErrorMessage(
+              err,
+              "Detailed summary could not be generated right now. Please try again.",
+            ),
         );
         setArticle((current) =>
           current ? { ...current, detailedStatus: "NONE" } : current,
@@ -179,6 +180,7 @@ export default function Article() {
     detailedSummary,
     detailedStatus,
     detailedConfidence,
+    modelUsed,
     gist,
     keyFacts,
     bulletPoints,
@@ -314,7 +316,11 @@ export default function Article() {
                   <Sparkles className="icon icon--xl ai-summary__icon" />
                   <div>
                     <h3 className="ai-summary__title">AI-Generated Summary</h3>
-                    <p className="ai-summary__byline">Created by CURA AI</p>
+                    <p className="ai-summary__byline">
+                      {modelUsed === "deterministic-source-fallback"
+                        ? "Source-based fallback while AI is unavailable"
+                        : "Created by CURA AI"}
+                    </p>
                   </div>
                 </div>
                 {generatingDetailed || detailedStatus === "PENDING" ? (
@@ -330,7 +336,9 @@ export default function Article() {
                       </p>
                     )}
                     {detailedSummary
-                      .split(/\n+/)
+                      .split(/\n{2,}/)
+                      .map((paragraph) => paragraph.trim())
+                      .filter(Boolean)
                       .map((paragraph, index) => (
                         <p key={index} className="ai-summary__body">
                           {paragraph}

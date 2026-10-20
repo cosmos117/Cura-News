@@ -8,6 +8,7 @@ import {
   hasHighNgramOverlap,
 } from "./content/schema.js";
 import { tierForWordCount, TIER_FULL } from "./content/tiers.js";
+import { formatDetailedText } from "../utils/formatDetailedText.js";
 
 const SYSTEM_PROMPT = `You are a careful news explainer for a general news aggregator read by a broad audience.
 Rules:
@@ -21,20 +22,66 @@ Rules:
 
 const countWords = (value) => value.trim().split(/\s+/).filter(Boolean).length;
 
-const normalizeParagraphs = (value) =>
-  value
-    .replace(/\r\n?/g, "\n")
-    .split(/\n+/)
-    .map((paragraph) => paragraph.trim())
+const buildSourceFallback = (article, text, sourceType) => {
+  const words = text.trim().split(/\s+/).slice(0, 100);
+  const midpoint = Math.ceil(words.length / 2);
+  const detailed = [
+    words.slice(0, midpoint).join(" "),
+    words.slice(midpoint).join(" "),
+  ]
     .filter(Boolean)
     .join("\n\n");
 
-const normalizeOutput = (output) => {
+  return {
+    status: "DONE",
+    detailSourceType: sourceType,
+    promptVersion: `${PROMPT_VERSION}-source-fallback`,
+    sourceWordCount: text.trim().split(/\s+/).length,
+    sourceTier: tierForWordCount(text.trim().split(/\s+/).length),
+    modelUsed: "deterministic-source-fallback",
+    detailed: formatDetailedText(detailed).text || detailed,
+    tags: article.tags || [],
+    category: article.category || "Other",
+    confidence: "low",
+    fallbackReason: "AI providers are temporarily rate-limited",
+  };
+};
+
+const normalizeOutput = (output, fallbackTags = []) => {
   if (!output || typeof output !== "object") {
     throw new Error("Detailed AI output must be an object");
   }
 
-  const parsed = detailedContentSchema.safeParse(output);
+  const tags = Array.isArray(output.tags)
+    ? [...new Set(output.tags.filter((tag) => ["Polity", "Economy", "Defense", "Science", "International"].includes(tag)))].slice(0, 3)
+    : [];
+  const formatted = typeof output.detailed === "string"
+    ? formatDetailedText(output.detailed)
+    : { valid: false, reason: "detailed is not a string" };
+  if (!formatted.valid) {
+    throw new Error(`detailed: ${formatted.reason}`);
+  }
+
+  const candidate = {
+    ...output,
+    tags: tags.length ? tags : fallbackTags,
+    category: [
+      "Politics",
+      "Business",
+      "Sports",
+      "Tech",
+      "World",
+      "Entertainment",
+      "Other",
+    ].includes(output.category)
+      ? output.category
+      : "Other",
+    confidence: ["high", "medium", "low"].includes(output.confidence)
+      ? output.confidence
+      : "medium",
+    detailed: formatted.text,
+  };
+  const parsed = detailedContentSchema.safeParse(candidate);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new Error(`${issue.path.join(".") || "output"}: ${issue.message}`);
@@ -45,7 +92,7 @@ const normalizeOutput = (output) => {
 
   return {
     ...parsed.data,
-    detailed: normalizeParagraphs(parsed.data.detailed),
+    detailed: formatDetailedText(parsed.data.detailed).text,
   };
 };
 
@@ -91,6 +138,8 @@ const todayStart = () => {
   return start;
 };
 
+const isRateLimitedError = (error) => error?.statusCode === 429;
+
 export async function generateDetailedSummary(article) {
   const extracted = await extractArticleText(article.url);
   if (!extracted.available) {
@@ -129,17 +178,23 @@ export async function generateDetailedSummary(article) {
       systemPrompt: SYSTEM_PROMPT,
       userPrompt: buildPrompt(input),
     });
-    output = normalizeOutput(rawOutput);
+    output = normalizeOutput(rawOutput, article.tags);
     modelUsed = rawOutput.__aiMeta?.modelUsed || null;
   } catch (firstError) {
+    if (isRateLimitedError(firstError)) {
+      return buildSourceFallback(article, extracted.text, extracted.sourceType);
+    }
     try {
       const rawRepairOutput = await generateStructured({
         systemPrompt: SYSTEM_PROMPT,
         userPrompt: buildRepairPrompt(input, firstError.message),
       });
-      output = normalizeOutput(rawRepairOutput);
+      output = normalizeOutput(rawRepairOutput, article.tags);
       modelUsed = rawRepairOutput.__aiMeta?.modelUsed || null;
     } catch (repairError) {
+      if (isRateLimitedError(repairError)) {
+        return buildSourceFallback(article, extracted.text, extracted.sourceType);
+      }
       return {
         status: "FAILED",
         detailSourceType: extracted.sourceType,
@@ -148,24 +203,46 @@ export async function generateDetailedSummary(article) {
     }
   }
 
-  if (hasHighSourceOverlap(output.detailed, extracted.text)) {
-    return {
-      status: "FAILED",
-      detailSourceType: extracted.sourceType,
-      reason: "Detailed summary was too similar to the source text",
-    };
-  }
-  if (
-    hasHighNgramOverlap(output.detailed, [
-      article.summary,
-      ...(article.keyFacts?.length ? article.keyFacts : article.bulletPoints || []),
-    ])
-  ) {
-    return {
-      status: "FAILED",
-      detailSourceType: extracted.sourceType,
-      reason: "Detailed summary repeated the stored summary or key facts",
-    };
+  const references = [
+    article.summary,
+    ...(article.keyFacts?.length ? article.keyFacts : article.bulletPoints || []),
+  ];
+  const overlapReason = () =>
+    hasHighSourceOverlap(output.detailed, extracted.text)
+      ? "Detailed summary was too similar to the source text"
+      : hasHighNgramOverlap(output.detailed, references)
+        ? "Detailed summary repeated the stored summary or key facts"
+        : null;
+  const overlap = overlapReason();
+  if (overlap) {
+    try {
+      const repaired = await generateStructured({
+        systemPrompt: SYSTEM_PROMPT,
+        userPrompt: buildRepairPrompt(
+          input,
+          `${overlap}. Write a new narrative with different sentence structure and details from the source.`,
+        ),
+      });
+      output = normalizeOutput(repaired, article.tags);
+      modelUsed = repaired.__aiMeta?.modelUsed || modelUsed;
+    } catch (repairError) {
+      if (isRateLimitedError(repairError)) {
+        return buildSourceFallback(article, extracted.text, extracted.sourceType);
+      }
+      return {
+        status: "FAILED",
+        detailSourceType: extracted.sourceType,
+        reason: repairError.message,
+      };
+    }
+    const repairedOverlap = overlapReason();
+    if (repairedOverlap) {
+      return {
+        status: "FAILED",
+        detailSourceType: extracted.sourceType,
+        reason: repairedOverlap,
+      };
+    }
   }
 
   return {

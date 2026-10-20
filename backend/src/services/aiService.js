@@ -206,7 +206,7 @@ export async function generateStructured({
 }) {
   if (Date.now() < aiRateLimitedUntil) {
     const error = new Error(
-      "AI providers are rate-limited; using the rule-based fallback",
+      "AI providers are temporarily rate-limited",
     );
     error.statusCode = 429;
     throw error;
