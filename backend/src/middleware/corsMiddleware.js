@@ -2,14 +2,23 @@ import cors from "cors";
 import { config } from "../config/env.js";
 
 /**
- * Allowed origins, parsed from CORS_ORIGIN.
+ * Parse CORS_ORIGIN into a list of allowed origins.
  *
- * CORS_ORIGIN accepts a comma-separated list. Passing the raw string as a
- * single `origin` meant a multi-origin config silently never matched anything.
+ * It accepts a comma-separated list. Passing the raw string as a single
+ * `origin` meant a multi-origin config silently never matched anything.
+ * Trailing slashes are dropped: a browser's Origin header never has one, but
+ * a pasted site URL usually does, and that mismatch blocks every request.
+ *
+ * @param {string} value - Raw CORS_ORIGIN
+ * @returns {string[]}
  */
-const allowedOrigins = config.CORS_ORIGIN.split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+export const parseAllowedOrigins = (value) =>
+  String(value || "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+
+const allowedOrigins = parseAllowedOrigins(config.CORS_ORIGIN);
 
 const corsOptions = {
   origin: (origin, callback) => {

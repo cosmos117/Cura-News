@@ -337,6 +337,16 @@ async function main() {
     }
   });
 
+  await check("CORS_ORIGIN tolerates trailing slashes, spaces and lists", async () => {
+    const { parseAllowedOrigins } = await import("../src/middleware/corsMiddleware.js");
+    assert.deepEqual(parseAllowedOrigins("https://cura-news.vercel.app/"), ["https://cura-news.vercel.app"]);
+    assert.deepEqual(
+      parseAllowedOrigins(" https://a.vercel.app/ ,http://localhost:3000, ,https://b.example.com// "),
+      ["https://a.vercel.app", "http://localhost:3000", "https://b.example.com"],
+    );
+    assert.deepEqual(parseAllowedOrigins(""), []);
+  });
+
   // ---------- config / env ----------
   await check("dotenv/env config loads real values", async () => {
     const { config } = await import("../src/config/env.js");
