@@ -1,28 +1,15 @@
 /**
- * Content schema for AI-generated article fields.
- *
- * One job per field (see prompts.js):
- *   headline  - rewritten title, max 120 chars, shown once under the topic chip
- *   summary   - 2 sentences, 30-45 words: what happened, in broad terms
- *   keyFacts  - 0-5 atomic facts (4-15 words each): specific numbers, names,
- *               places, dates, causes. Never restates the summary.
- *   detailed  - null OR 100-120 words in exactly 2 paragraphs: narrative that adds
- *               background, cause and impact. Never reuses summary sentences.
+ * Validation for the AI-written detailed summary, plus the word, paragraph and
+ * overlap helpers it relies on. Short summaries use no AI (see shortSummary.js).
  *
  * Zod (not manual validation) so the rules are declarative and unit-testable.
- * Word limits are slightly wider than the prompt's targets to tolerate normal
+ * Word limits are slightly wider than the prompt's target to tolerate normal
  * model variance; the prompt itself asks for the tighter range.
  */
 
 import { DETAILED_WORDS } from "../../utils/formatDetailedText.js";
 import { z } from "zod";
-import {
-  TIER_FULL,
-  TIER_PARTIAL,
-  TIER_THIN,
-  TIER_RULES,
-  tierForWordCount,
-} from "./tiers.js";
+import { tierForWordCount, TIER_FULL, TIER_PARTIAL, TIER_THIN } from "./tiers.js";
 
 export const VALID_TAGS = ["Polity", "Economy", "Defense", "Science", "International"];
 export const VALID_CATEGORIES = [
@@ -81,21 +68,6 @@ export const ngramOverlap = (left, right, size = 3) => {
 export const hasHighNgramOverlap = (text, references) =>
   references.some((reference) => ngramOverlap(text, reference) >= 0.2);
 
-/** Summary word bounds per tier. THIN sources cannot support 25 words honestly. */
-const SUMMARY_BOUNDS = {
-  [TIER_FULL]: { min: 25, max: 50 },
-  [TIER_PARTIAL]: { min: 20, max: 50 },
-  [TIER_THIN]: { min: 8, max: 50 },
-};
-
-const keyFactSchema = z
-  .string()
-  .trim()
-  .refine(
-    (value) => countWords(value) >= 3 && countWords(value) <= 18,
-    "each key fact must be 3-18 words",
-  );
-
 /**
  * detailed is null when the source text cannot support a 100-120 word
  * narrative. When present it must be 90-130 words (the prompt asks for 100-120)
@@ -129,66 +101,6 @@ const classificationSchema = {
   subtopics: z.array(z.string().trim().max(80)).max(5).default([]),
   confidence: z.enum(["high", "medium", "low"]).default("medium"),
 };
-
-/**
- * Build the article content schema for a source-length tier.
- *
- * The tier decides the summary's minimum length and the key-fact ceiling, so
- * thin input is never forced to pad. `detailed` stays nullable at parse time
- * (a model that adds one on a thin source is not a hard failure); the caller
- * coerces it to null for non-FULL tiers via `applyTierCaps`.
- *
- * @param {"FULL"|"PARTIAL"|"THIN"} tier
- */
-export function contentSchemaForTier(tier) {
-  const bounds = SUMMARY_BOUNDS[tier] || SUMMARY_BOUNDS[TIER_FULL];
-  const maxFacts = TIER_RULES[tier]?.maxKeyFacts ?? 5;
-
-  const summarySchema = z
-    .string()
-    .trim()
-    .refine(
-      (value) => {
-        const words = countWords(value);
-        return words >= bounds.min && words <= bounds.max;
-      },
-      `summary must be ${bounds.min}-${bounds.max} words`,
-    );
-
-  return z.object({
-    headline: z
-      .string()
-      .trim()
-      .min(10, "headline must be at least 10 characters")
-      .max(120, "headline must be at most 120 characters"),
-    summary: summarySchema,
-    keyFacts: z.array(keyFactSchema).max(maxFacts, `at most ${maxFacts} key facts`).default([]),
-    detailed: detailedSchema.default(null),
-    ...classificationSchema,
-  });
-}
-
-/**
- * Enforce tier caps that are policy, not validation. For PARTIAL/THIN
- * sources we never publish a detailed narrative (the dedicated detailed path
- * will fetch full text and try again), and we trim key facts to the tier cap.
- */
-export function applyTierCaps(content, tier) {
-  const rules = TIER_RULES[tier] || TIER_RULES[TIER_FULL];
-  const capped = { ...content };
-  if (!rules.detailed) {
-    capped.detailed = null;
-  }
-  if (Array.isArray(capped.keyFacts) && capped.keyFacts.length > rules.maxKeyFacts) {
-    capped.keyFacts = capped.keyFacts.slice(0, rules.maxKeyFacts);
-  }
-  return capped;
-}
-
-/**
- * The default single-call content schema (FULL tier). `detailed` defaults to
- * null so a model that omits it is accepted rather than rejected.
- */
 
 /** Detailed-only schema, used by the detailed summary service. */
 export const detailedContentSchema = z.object({

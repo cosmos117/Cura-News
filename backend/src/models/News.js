@@ -143,9 +143,9 @@ const newsSchema = new mongoose.Schema(
       type: String,
       enum: DETAIL_SOURCE_TYPES,
     },
-    /* ---- Content model v2 (see services/content/prompts.js) ---- */
-    // Version of the prompt that produced headline/summary/keyFacts/detailed;
-    // null means the rule-based fallback wrote the summary.
+    /* ---- Content model v2 ---- */
+    // Version of the prompt that produced the detailed summary; null when
+    // no AI was involved.
     promptVersion: {
       type: String,
       trim: true,

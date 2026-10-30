@@ -19,8 +19,8 @@ import { SOURCE_PROFILES } from "../constants/sources";
 const FEATURES = [
   {
     icon: Sparkles,
-    title: "AI summaries that respect the source",
-    text: "Every story gets a short AI brief and key points, plus a detailed explainer when you want more, all written only from what the publisher reported. If a page is too thin or paywalled, we say so instead of guessing.",
+    title: "Summaries in the publisher's own words",
+    text: "Every story opens with a short summary and key points taken straight from what the publisher reported. Want more? Open a detailed AI explainer written only from the full article. If a page is too thin or paywalled, we say so instead of guessing.",
   },
   {
     icon: SlidersHorizontal,
@@ -59,14 +59,14 @@ const STEPS = [
   {
     icon: Sparkles,
     step: "Step 2",
-    title: "AI distils the story",
-    text: "AI writes a short brief and key points for each story, and files it under one of fifteen topics.",
+    title: "We distil the story",
+    text: "Each story gets a short summary and key points drawn from the publisher's own text, filed under one of fifteen topics.",
   },
   {
     icon: BookOpen,
     step: "Step 3",
     title: "You read, not doomscroll",
-    text: "Skim the briefs, go deeper on what interests you, and open the full story at the source when it matters.",
+    text: "Skim the summaries, open a detailed AI explainer on what interests you, and read the full story at the source when it matters.",
   },
 ];
 
@@ -122,15 +122,16 @@ export default function Landing() {
           <div className="landing-hero__copy">
             <p className="landing-badge">
               <Sparkles className="icon icon--sm" />
-              AI summaries of the day's headlines, from sources you trust
+              The day's headlines, summarized from sources you trust
             </p>
             <h1 className="landing-title">
               Cut the noise. <span className="landing-title__accent">Keep the news that matters.</span>
             </h1>
             <p className="landing-sub">
               CURA News aggregates The Hindu, Indian Express and Times of India
-              — clear AI summaries of every story, so an hour of headlines
-              becomes a 5-minute catch up.
+              — a clear summary of every story, with a detailed AI explainer
+              when you want more, so an hour of headlines becomes a 5-minute
+              catch up.
             </p>
             <div className="landing-cta-row">
               <Link to={primaryTo} className="btn btn-primary btn-lg">
@@ -170,8 +171,8 @@ export default function Landing() {
             <div className="mock-float mock-float--ai">
               <Sparkles className="icon icon--lg" />
               <div>
-                <p className="mock-float__title">AI detailed summary</p>
-                <p className="mock-float__sub">Validated - source-checked</p>
+                <p className="mock-float__title">Detailed AI explainer</p>
+                <p className="mock-float__sub">On demand - from the full article</p>
               </div>
             </div>
           </div>
@@ -208,7 +209,7 @@ export default function Landing() {
       <section id="how" className="landing-section landing-section--tinted">
         <div className="container">
           <p className="landing-kicker">How it works</p>
-          <h2 className="landing-heading">From headline to brief in three steps</h2>
+          <h2 className="landing-heading">From headline to summary in three steps</h2>
           <div className="landing-flow" aria-label="How it works steps">
             {STEPS.map((s, i) => (
               <Fragment key={s.title}>
@@ -251,7 +252,7 @@ export default function Landing() {
         <div className="container">
           <div className="landing-cta-band">
             <h2 className="landing-cta-band__title">Today&apos;s headlines, summarized in minutes.</h2>
-            <p className="landing-cta-band__sub">Join CURA News, read the first AI brief in under a minute, and keep up with every source in one place.</p>
+            <p className="landing-cta-band__sub">Join CURA News, read your first summary in under a minute, and keep up with every source in one place.</p>
             <div className="row row-3 row--center">
               <Link to={primaryTo} className="btn-cta-light">{primaryLabel}<ArrowRight className="icon icon--lg" /></Link>
             </div>
@@ -265,7 +266,7 @@ export default function Landing() {
             <span className="brand__mark"><img src="/logo.svg" alt="" width="40" height="40" /></span>
             <span className="brand__name">CURA News</span>
           </div>
-          <p>AI-powered news summaries from multiple trusted sources — with briefs and key points.</p>
+          <p>News summaries from multiple trusted sources, with key points and detailed AI explainers on demand.</p>
           <p className="landing-footer__copy">© {new Date().getFullYear()} CURA News. Summaries may contain inaccuracies.</p>
         </div>
       </footer>

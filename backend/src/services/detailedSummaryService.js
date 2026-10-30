@@ -6,14 +6,16 @@ import {
   RATE_LIMITED_MESSAGE,
 } from "./aiService.js";
 import { extractArticleText } from "./articleTextExtractor.js";
-import { PROMPT_VERSION } from "./content/prompts.js";
 import {
   detailedContentSchema,
   hasHighNgramOverlap,
 } from "./content/schema.js";
-import { tierForWordCount, TIER_FULL } from "./content/tiers.js";
+import { tierForWordCount } from "./content/tiers.js";
 import { formatDetailedText } from "../utils/formatDetailedText.js";
 import { startOfUtcDay } from "../utils/date.js";
+
+/** Stored on each detailed summary so output from older prompts can be told apart. */
+const PROMPT_VERSION = "content-v2-2026-10-17";
 
 const SYSTEM_PROMPT = `You are a careful news explainer for a general news aggregator read by a broad audience.
 Rules:
