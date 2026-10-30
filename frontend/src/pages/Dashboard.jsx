@@ -4,7 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { newsAPI, bookmarkAPI } from "../services/api";
 import SourceLogo from "../components/SourceLogo";
 import DetailedBadge from "../components/DetailedBadge";
-import useCompactOnScroll from "../hooks/useCompactOnScroll";
+import useHideOnScroll from "../hooks/useHideOnScroll";
 import {
   NEWS_CATEGORIES,
   TOPIC_LABEL_BY_ID,
@@ -261,7 +261,7 @@ const emptyFacets = {
 export default function Dashboard() {
   const { user, logout, isAuthenticated, notice, clearNotice } = useAuth();
   const navigate = useNavigate();
-  const compactHeader = useCompactOnScroll();
+  const headerHidden = useHideOnScroll();
 
   // For You: today's news from the reader's picked papers and topics.
   const preferences = user?.preferences;
@@ -610,12 +610,10 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
 
   return (
     <div className="page">
-      <header className={`site-header${compactHeader ? " site-header--compact" : ""}`}>
+      <header className={`site-header site-header--autohide${headerHidden ? " site-header--hidden" : ""}`}>
         <div className="container site-header__inner">
           <div className="header__left">
-            <div className="header__weather">
-              <WeatherWidget />
-            </div>
+            <WeatherWidget />
 
             <div className="brand">
               <div className="brand__mark">

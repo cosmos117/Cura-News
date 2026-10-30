@@ -2933,53 +2933,22 @@ fieldset legend {
   color: var(--green-600);
 }
 
-/* ========================= 19. COMPACT HEADER ON SCROLL ========================= */
-/* The dashboard header shrinks while the reader scrolls down and returns in
-   full when they scroll up (see hooks/useCompactOnScroll.js). */
-.site-header__inner,
-.header__left,
-.brand__mark img,
-.brand__name {
+/* ========================= 19. HEADER HIDES ON SCROLL ========================= */
+/* The dashboard header slides out of view while the reader scrolls down and
+   back when they scroll up (see hooks/useHideOnScroll.js). It also returns
+   when a keyboard user tabs into it. */
+.site-header--autohide {
   transition:
-    padding 0.3s ease,
-    gap 0.3s ease,
-    width 0.3s ease,
-    height 0.3s ease,
-    font-size 0.3s ease;
+    transform 0.3s ease,
+    box-shadow 0.3s ease;
 }
 
-.header__weather,
-.brand__date,
-.user-chip__email {
-  overflow: hidden;
-  transition:
-    max-width 0.3s ease,
-    max-height 0.3s ease,
-    opacity 0.2s ease,
-    visibility 0s linear 0s;
+.site-header--hidden {
+  transform: translateY(-100%);
+  box-shadow: none;
 }
 
-.header__weather { max-width: 240px; }
-.brand__date,
-.user-chip__email { max-height: 2em; }
-
-.site-header--compact .site-header__inner { padding-block: var(--space-2); }
-.site-header--compact .header__left { gap: 0; }
-.site-header--compact .brand__mark img { width: 32px; height: 32px; }
-.site-header--compact .brand__name { font-size: var(--text-xl); }
-
-.site-header--compact .header__weather,
-.site-header--compact .brand__date,
-.site-header--compact .user-chip__email {
-  opacity: 0;
-  visibility: hidden;
-  transition:
-    max-width 0.3s ease,
-    max-height 0.3s ease,
-    opacity 0.2s ease,
-    visibility 0s linear 0.3s;
+.site-header--hidden:focus-within {
+  transform: none;
+  box-shadow: var(--shadow-md);
 }
-
-.site-header--compact .header__weather { max-width: 0; }
-.site-header--compact .brand__date,
-.site-header--compact .user-chip__email { max-height: 0; }
