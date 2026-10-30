@@ -23,15 +23,15 @@ import { useState } from "react";
 const SOURCE_ART = {
   "The Hindu": {
     file: "/logos/the-hindu.png",
-    color: "#c0392b",
+    color: "#fb7575",
   },
   "Indian Express": {
     file: "/logos/indian-express.png",
-    color: "#1f2937",
+    color: "#fde871",
   },
   "Times of India": {
     file: "/logos/times-of-india.png",
-    color: "#e2571e",
+    color: "#ffa07b",
   },
 };
 

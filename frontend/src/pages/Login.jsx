@@ -2,12 +2,13 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Mail, Lock, AlertCircle, Loader, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import GoogleSignInButton from "../components/GoogleSignInButton";
 
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const { login, loading, error, clearError } = useAuth();
+  const { login, loading, error, clearError, notice } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -27,12 +28,21 @@ export default function Login() {
           <p className="auth-card__subtitle">Sign in to your account</p>
         </div>
 
+        {/* e.g. confirmation after deleting the account */}
+        {notice && !error && (
+          <div className="alert alert--info" role="status">
+            <p className="alert-body">{notice}</p>
+          </div>
+        )}
+
         {error && (
           <div className="alert alert--error" role="alert">
             <AlertCircle className="icon icon--lg" />
             <p className="alert-body">{error}</p>
           </div>
         )}
+
+        <GoogleSignInButton label="Sign in with Google" />
 
         <form onSubmit={handleSubmit} className="form" onChange={clearError}>
           <div>

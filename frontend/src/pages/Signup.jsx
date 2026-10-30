@@ -10,6 +10,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import GoogleSignInButton from "../components/GoogleSignInButton";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -63,7 +64,8 @@ export default function Signup() {
     );
 
     if (result.success) {
-      navigate("/dashboard", { replace: true });
+      // A new account picks its sources and topics before the dashboard.
+      navigate("/welcome", { replace: true });
     }
   };
 
@@ -84,6 +86,8 @@ export default function Signup() {
             <p className="alert-body">{displayedError}</p>
           </div>
         )}
+
+        <GoogleSignInButton label="Sign up with Google" />
 
         <form onSubmit={handleSubmit} className="form" noValidate>
           <div>

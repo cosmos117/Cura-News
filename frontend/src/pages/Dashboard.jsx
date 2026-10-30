@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { newsAPI } from "../services/api";
+import { newsAPI, bookmarkAPI } from "../services/api";
 import SourceLogo from "../components/SourceLogo";
 import {
   NEWS_CATEGORIES,
@@ -9,8 +9,9 @@ import {
   NEWS_SOURCES,
   SEARCH_MIN_LENGTH,
   getCategoryClass,
-  getTagClass,
 } from "../constants/news";
+import { topicIcon } from "../constants/topicIcons";
+import { readFeedMode, saveFeedMode } from "../utils/feedMode";
 import {
   formatRelativeTime,
   formatToday,
@@ -25,24 +26,14 @@ import {
   AlertCircle,
   Calendar,
   ChevronRight,
+  ChevronLeft,
   ExternalLink,
   LayoutGrid,
   LayoutList,
-  Landmark,
-  Briefcase,
-  Trophy,
-  Cpu,
-  Globe2,
-  Clapperboard,
-  Shapes,
   SlidersHorizontal,
-  Shield,
-  Scale,
-  Leaf,
-  Heart,
-  Users,
-  Edit,
-  Image,
+  Sparkles,
+  Clock,
+  Settings as SettingsIcon,
   Sun,
   Cloud,
   CloudRain,
@@ -54,9 +45,47 @@ import {
   Thermometer,
   Check,
   X,
+  Bookmark,
 } from "lucide-react";
 
 const SEARCH_DEBOUNCE_MS = 300;
+const DASHBOARD_STATE_KEY = "curaDashboardState";
+
+const readDashboardState = () => {
+  try {
+    const raw = sessionStorage.getItem(DASHBOARD_STATE_KEY);
+    if (!raw) return {};
+    const saved = JSON.parse(raw);
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    return {};
+  }
+};
+
+const getSavedPage = (value) => {
+  const page = Number.parseInt(value, 10);
+  return Number.isFinite(page) && page > 0 ? page : 1;
+};
+
+const getSavedViewMode = (value) => (value === "cards" ? "cards" : "line");
+
+const saveDashboardState = (state) => {
+  try {
+    sessionStorage.setItem(DASHBOARD_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Session storage may be unavailable in restricted browser contexts.
+  }
+};
+
+/**
+ * Articles fetched per page.
+ *
+ * The backend paginates server-side (`limit` + `skip`), so the page size is
+ * also the largest window the client ever asks for. A day with more articles
+ * than this is reachable through the pagination controls instead of being
+ * silently truncated.
+ */
+const PAGE_SIZE = 20;
 
 /**
  * How often the dashboard re-polls for articles.
@@ -66,25 +95,6 @@ const SEARCH_DEBOUNCE_MS = 300;
  * how a stale "0 articles" dashboard survives a successful ingest.
  */
 const REFRESH_INTERVAL_MS = 60 * 1000;
-
-/** Icon per category, for the topic cards. */
-const CATEGORY_ICONS = {
-  "Politics & Governance": Landmark,
-  "Opinion & Editorial": Edit,
-  "Economy & Business": Briefcase,
-  "Agriculture & Rural": Shapes,
-  "World Affairs": Globe2,
-  "Defence & Security": Shield,
-  "Law & Judiciary": Scale,
-  "Science & Technology": Cpu,
-  "Environment & Climate": Leaf,
-  "Health": Heart,
-  "Education & Society": Users,
-  "Culture & Lifestyle": Image,
-  Sports: Trophy,
-  Entertainment: Clapperboard,
-  Other: Shapes,
-};
 
 /** Indian cities offered in the header weather dropdown. */
 const CITIES = [
@@ -247,22 +257,93 @@ const emptyFacets = {
 };
 
 export default function Dashboard() {
-  const { user, logout, isAuthenticated } = useAuth();
+  const { user, logout, isAuthenticated, notice, clearNotice } = useAuth();
   const navigate = useNavigate();
+
+  // For You: today's news from the reader's picked papers and topics.
+  const preferences = user?.preferences;
+  const pickedSources = useMemo(() => preferences?.sources || [], [preferences]);
+  const pickedTopics = useMemo(
+    () => (preferences?.topics || []).map((id) => TOPIC_LABEL_BY_ID[id]).filter(Boolean),
+    [preferences],
+  );
+  const hasPicks = pickedSources.length > 0 && pickedTopics.length > 0;
+  const [feedChoice, setFeedChoice] = useState(readFeedMode);
+  // For You is the default once there are picks; a remembered choice wins.
+  const forYou = hasPicks && (feedChoice ?? "for-you") === "for-you";
+  const savedDashboardState = useRef(readDashboardState());
   const [articles, setArticles] = useState([]);
   const [facets, setFacets] = useState(emptyFacets);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [searchInput, setSearchInput] = useState("");
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchInput, setSearchInput] = useState(
+    () =>
+      typeof savedDashboardState.current.searchInput === "string"
+        ? savedDashboardState.current.searchInput
+        : "",
+  );
+  const [searchTerm, setSearchTerm] = useState(
+    () =>
+      typeof savedDashboardState.current.searchTerm === "string"
+        ? savedDashboardState.current.searchTerm
+        : "",
+  );
   const [selectedCategories, setSelectedCategories] = useState(() => {
-    const category = new URLSearchParams(window.location.search).get("category");
+    const category =
+      new URLSearchParams(window.location.search).get("category") ||
+      savedDashboardState.current.selectedCategories?.[0];
     return category ? [category] : [];
   });
-  const [selectedSources, setSelectedSources] = useState([]);
+  const [selectedSources, setSelectedSources] = useState(
+    () => savedDashboardState.current.selectedSources || [],
+  );
   const [error, setError] = useState(null);
-  const [viewMode, setViewMode] = useState("grouped");
+  const [viewMode, setViewMode] = useState(() =>
+    getSavedViewMode(savedDashboardState.current.viewMode),
+  );
+  const [page, setPage] = useState(() =>
+    getSavedPage(savedDashboardState.current.page),
+  );
+  const [hasMore, setHasMore] = useState(false);
   const debounceRef = useRef(null);
+  const lastSearchTermRef = useRef("");
+  const resultsRef = useRef(null);
+  const pendingScrollPageRef = useRef(null);
+  const restoredScrollRef = useRef(false);
+
+  lastSearchTermRef.current = searchTerm;
+
+  useEffect(() => {
+    const nextState = {
+      searchInput,
+      searchTerm,
+      selectedCategories,
+      selectedSources,
+      viewMode,
+      page,
+      scrollY: savedDashboardState.current.scrollY || 0,
+    };
+    savedDashboardState.current = nextState;
+    saveDashboardState(nextState);
+  }, [
+    page,
+    searchInput,
+    searchTerm,
+    selectedCategories,
+    selectedSources,
+    viewMode,
+  ]);
+
+  useEffect(() => {
+    const rememberScroll = () => {
+      const current = readDashboardState();
+      const nextState = { ...current, scrollY: window.scrollY };
+      savedDashboardState.current = nextState;
+      saveDashboardState(nextState);
+    };
+    window.addEventListener("scroll", rememberScroll, { passive: true });
+    return () => window.removeEventListener("scroll", rememberScroll);
+  }, []);
 
   // Debounce the search box so typing does not fire a request per keystroke.
   useEffect(() => {
@@ -270,7 +351,13 @@ export default function Dashboard() {
     debounceRef.current = setTimeout(() => {
       const term = searchInput.trim();
       // The backend rejects terms under SEARCH_MIN_LENGTH, so don't send them.
-      setSearchTerm(term.length >= SEARCH_MIN_LENGTH ? term : "");
+      const nextTerm = term.length >= SEARCH_MIN_LENGTH ? term : "";
+      if (nextTerm === lastSearchTermRef.current) return;
+      lastSearchTermRef.current = nextTerm;
+      setSearchTerm(nextTerm);
+      // A new search re-filters the whole result set, so the old page offset
+      // no longer points at the same articles.
+      setPage(1);
     }, SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(debounceRef.current);
@@ -290,14 +377,42 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
       setError(null);
     }
     try {
-      const params = { limit: 50, skip: 0 };
+      const params = {
+        limit: PAGE_SIZE,
+        skip: (page - 1) * PAGE_SIZE,
+      };
+      // In For You, a card filter left over from Latest that falls outside the
+      // picks is ignored rather than silently emptying the feed.
+      const categories = forYou
+        ? selectedCategories.filter((category) => pickedTopics.includes(category))
+        : selectedCategories;
+      const sources = forYou
+        ? selectedSources.filter((source) => pickedSources.includes(source))
+        : selectedSources;
       if (searchTerm) params.search = searchTerm;
-      if (selectedCategories.length) params.topic = selectedCategories.join(",");
-      if (selectedSources.length) params.source = selectedSources.join(",");
+      if (categories.length) params.topic = categories.join(",");
+      if (sources.length) params.source = sources.join(",");
 
-      const response = await newsAPI.getAll(params);
-      setArticles(response.data.data || []);
-      setTotal(response.data.pagination?.total ?? 0);
+      const response = forYou
+        ? await newsAPI.getForYou(params)
+        : await newsAPI.getAll(params);
+      const data = response.data.data || [];
+      const pagination = response.data.pagination || {};
+      const nextTotal = pagination.total ?? 0;
+
+      // The result set can shrink underneath the reader: the daily cleanup
+      // removes articles, and a filter change narrows the set. Landing on an
+      // empty page would be a dead end, so step back to the last page that
+      // still has content.
+      const lastPage = Math.max(1, Math.ceil(nextTotal / PAGE_SIZE));
+      if (page > lastPage && data.length === 0) {
+        setPage(lastPage);
+        return;
+      }
+
+      setArticles(data);
+      setTotal(nextTotal);
+      setHasMore(Boolean(pagination.hasMore));
       setFacets({ ...emptyFacets, ...response.data.facets });
       // Only surface errors from a foreground load; a failed background poll
       // should not replace a working list with an error banner.
@@ -307,7 +422,7 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [searchTerm, selectedCategories, selectedSources]);
+  }, [searchTerm, selectedCategories, selectedSources, page, forYou, pickedTopics, pickedSources]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -366,30 +481,108 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
     };
   }, [isAuthenticated, fetchArticles]);
 
+  // Move the reader to the top of the results when a new page has loaded, so
+  // a fresh page does not start below the tail of the previous one. The wait
+  // for `loading` to clear matters: scrolling while the list is still the
+  // old one lands the reader in the wrong place once the new page renders.
+  useEffect(() => {
+    if (pendingScrollPageRef.current === null) return;
+    if (loading || articles.length === 0) return;
+    pendingScrollPageRef.current = null;
+    const reducedMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    )?.matches;
+    resultsRef.current?.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "start",
+    });
+  }, [loading, articles]);
+
+  useEffect(() => {
+    if (loading || articles.length === 0 || restoredScrollRef.current) return;
+    restoredScrollRef.current = true;
+    const scrollY = Number(savedDashboardState.current.scrollY) || 0;
+    if (scrollY > 0) {
+      window.requestAnimationFrame(() => {
+        window.scrollTo(0, scrollY);
+        saveDashboardState({ ...readDashboardState(), scrollY });
+      });
+    }
+  }, [loading, articles]);
+
   const handleLogout = async () => {
     await logout();
     navigate("/login", { replace: true });
   };
 
-  /** Card toggles are multi-select: clicking an active card clears it. */
-  const makeToggle = (setter) => (value) =>
+  /**
+   * Change page and remember to scroll once the new articles are in place.
+   */
+  const goToPage = (nextPage) => {
+    pendingScrollPageRef.current = nextPage;
+    setPage(nextPage);
+  };
+
+  /**
+   * Card toggles are multi-select: clicking an active card clears it.
+   *
+   * Any filter change resets the page, because the filters are applied
+   * server-side: page 3 of the previous result set is not page 3 of the new
+   * one.
+   */
+  const makeToggle = (setter) => (value) => {
     setter((prev) =>
       prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value],
     );
+    setPage(1);
+  };
 
   const toggleCategory = makeToggle(setSelectedCategories);
   const toggleSource = makeToggle(setSelectedSources);
 
   const resetFilters = () => {
     setSearchInput("");
+    lastSearchTermRef.current = "";
     setSearchTerm("");
     setSelectedCategories([]);
     setSelectedSources([]);
+    setPage(1);
   };
+
+  /**
+   * Switch between For You and Latest. Without picks, For You opens the
+   * picker instead. The cards on screen differ per feed, so card filters
+   * start fresh; the search box is kept.
+   */
+  const chooseFeed = (mode) => {
+    if (mode === "for-you" && !hasPicks) {
+      navigate("/welcome");
+      return;
+    }
+    if ((mode === "for-you") === forYou) return;
+    saveFeedMode(mode);
+    setFeedChoice(mode);
+    setSelectedCategories([]);
+    setSelectedSources([]);
+    setPage(1);
+  };
+
+  // In For You only the picked papers and topics get cards.
+  const visibleSources = forYou ? NEWS_SOURCES.filter((s) => pickedSources.includes(s)) : NEWS_SOURCES;
+  const visibleCategories = forYou
+    ? NEWS_CATEGORIES.filter((c) => pickedTopics.includes(c))
+    : NEWS_CATEGORIES;
 
   const activeFilterCount = selectedCategories.length + selectedSources.length;
 
   const hasFilters = searchTerm !== "" || activeFilterCount > 0;
+
+  // Pagination readouts. `total` is the size of the filtered result set, not
+  // the size of the current page, so the range is derived from the offset.
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const firstShownOnPage =
+    total === 0 ? 0 : Math.min((page - 1) * PAGE_SIZE + 1, total);
+  const lastShownOnPage = total === 0 ? 0 : Math.min(page * PAGE_SIZE, total);
 
   const groupedBySource = useMemo(() => {
     const groups = {};
@@ -431,10 +624,50 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
           </div>
 
           <div className="segmented" role="group" aria-label="View mode">
-            
+            <button
+              type="button"
+              onClick={() => setViewMode("line")}
+              aria-pressed={viewMode === "line"}
+              title="Line view: one article per row, grouped by source"
+              className={`segmented__option${
+                viewMode === "line" ? " segmented__option--active" : ""
+              }`}
+            >
+              <LayoutList className="icon icon--sm" />
+              <span className="segmented__label">Line</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode("cards")}
+              aria-pressed={viewMode === "cards"}
+              title="Card view: two articles per row"
+              className={`segmented__option${
+                viewMode === "cards" ? " segmented__option--active" : ""
+              }`}
+            >
+              <LayoutGrid className="icon icon--sm" />
+              <span className="segmented__label">Cards</span>
+            </button>
           </div>
 
           <div className="row row-3">
+            <button
+              onClick={() => navigate("/bookmarks")}
+              className="btn btn-secondary btn-sm"
+              title="View saved articles"
+            >
+              <Bookmark className="icon icon--md" />
+              <span className="btn__label">Saved</span>
+            </button>
+            <button
+              onClick={() => navigate("/settings")}
+              className="icon-btn"
+              title="Settings"
+              aria-label="Settings"
+            >
+              <SettingsIcon className="icon icon--lg" />
+            </button>
             <button
               onClick={fetchArticles}
               disabled={loading}
@@ -461,6 +694,69 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
       </header>
 
       <main className="container page-body stack stack-6">
+        {notice && (
+          <div className="alert alert--info dashboard-notice" role="status">
+            <p className="alert-body">{notice}</p>
+            <button type="button" className="icon-btn" onClick={clearNotice} aria-label="Dismiss">
+              <X className="icon icon--md" />
+            </button>
+          </div>
+        )}
+
+        <section className="feed-switch" aria-label="Choose your feed">
+          <div
+            className="feed-switch__tabs"
+            role="group"
+            aria-label="Feed"
+            data-active={forYou ? "for-you" : "latest"}
+          >
+            <span className="feed-switch__indicator" aria-hidden="true" />
+            <button
+              type="button"
+              aria-pressed={forYou}
+              onClick={() => chooseFeed("for-you")}
+              className={`feed-switch__tab${forYou ? " feed-switch__tab--active" : ""}`}
+            >
+              <Sparkles className="icon icon--md" />
+              For You
+            </button>
+            <button
+              type="button"
+              aria-pressed={!forYou}
+              onClick={() => chooseFeed("latest")}
+              className={`feed-switch__tab${!forYou ? " feed-switch__tab--active" : ""}`}
+            >
+              <Clock className="icon icon--md" />
+              Latest
+            </button>
+          </div>
+
+          {forYou ? (
+            <p className="feed-switch__summary">
+              <span>
+                Your picks: <strong>{pickedSources.join(", ")}</strong> ·{" "}
+                <strong>
+                  {pickedTopics.length} {pickedTopics.length === 1 ? "topic" : "topics"}
+                </strong>
+              </span>
+              <button type="button" className="link-quiet" onClick={() => navigate("/welcome")}>
+                Edit picks
+              </button>
+            </p>
+          ) : !hasPicks ? (
+            <p className="feed-switch__summary">
+              <span>Get a feed of just the papers and topics you care about.</span>
+              <button type="button" className="link-quiet" onClick={() => navigate("/welcome")}>
+                Set up For You
+              </button>
+            </p>
+          ) : (
+            <p className="feed-switch__summary">
+              <span>Everything from all three papers, newest first.</span>
+            </p>
+          )}
+        </section>
+
         {/* Source cards */}
         <section aria-label="Browse by source">
           <h2 className="section-title source-section-head__title">
@@ -469,25 +765,32 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
           </h2>
 
           <div className="source-grid">
-            {NEWS_SOURCES.map((source) => {
+            {visibleSources.map((source) => {
               const count = facets.bySource[source] || 0;
               const active = selectedSources.includes(source);
+              const cardVariant = {
+                "The Hindu": "source-card--the-hindu",
+                "Indian Express": "source-card--indian-express",
+                "Times of India": "source-card--times-of-india",
+              }[source] || "";
 
               return (
                 <button
                   key={source}
                   onClick={() => toggleSource(source)}
                   aria-pressed={active}
+                  aria-label={`${source}: ${count} ${
+                    count === 1 ? "article" : "articles"
+                  }`}
                   title={
                     count === 0
                       ? `${source}: no articles match the other filters`
                       : `${source}: ${count} article${count === 1 ? "" : "s"}`
                   }
-                  className={`source-card${active ? " source-card--active" : ""}`}
+                  className={`source-card ${cardVariant}${active ? " source-card--active" : ""}`}
                 >
                   <SourceLogo source={source} />
                   <span className="source-card__meta">
-                    <span className="source-card__name">{source}</span>
                     <span className="source-card__count">
                       {count} {count === 1 ? "article" : "articles"}
                     </span>
@@ -517,7 +820,10 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
 
           <div className="topic-grid">
             <button
-              onClick={() => setSelectedCategories([])}
+              onClick={() => {
+                setSelectedCategories([]);
+                setPage(1);
+              }}
               aria-pressed={selectedCategories.length === 0}
               className={`topic-card topic-card--all${
                 selectedCategories.length === 0 ? " topic-card--active" : ""
@@ -535,8 +841,8 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
               </span>
             </button>
 
-            {NEWS_CATEGORIES.map((category) => {
-              const Icon = CATEGORY_ICONS[category] || Shapes;
+            {visibleCategories.map((category) => {
+              const Icon = topicIcon(category);
               const count = facets.byCategory[category] || 0;
               const active = selectedCategories.includes(category);
 
@@ -622,33 +928,80 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
           <div className="empty-state">
             <Newspaper className="empty-state__icon icon--2xl" />
             <p className="empty-state__title">
-              {hasFilters ? "No matching articles" : "No news for today"}
+              {hasFilters
+                ? "No matching articles"
+                : forYou
+                  ? "Nothing from your picks yet today"
+                  : "No news for today"}
             </p>
             <p className="empty-state__hint">
               {hasFilters
                 ? "Try removing a filter or widening your search"
-                : "Today's news is being prepared. Check back soon."}
+                : forYou
+                  ? "New stories arrive through the day. Adding a few topics fills your feed faster."
+                  : "Today's news is being prepared. Check back soon."}
             </p>
+            {forYou && !hasFilters && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => navigate("/welcome")}>
+                <Sparkles className="icon icon--md" />
+                Edit picks
+              </button>
+            )}
           </div>
-        ) : viewMode === "grouped" ? (
-          <div className="stack stack-8">
-            {Object.entries(groupedBySource).map(([source, sourceArticles]) => (
-              <section key={source}>
-                <div className="source-heading">
-                  <div className="source-heading__rule" />
-                  <h2 className="source-heading__name">{source}</h2>
-                  <span className="spacer" />
-                  <span className="source-heading__count">
-                    {sourceArticles.length}{" "}
-                    {sourceArticles.length === 1 ? "article" : "articles"}
-                  </span>
-                </div>
-                <ArticleGrid items={sourceArticles} />
-              </section>
-            ))}
+        ) : viewMode === "line" ? (
+          <div key={`line-${forYou}`} className="results-anchor feed-results" ref={resultsRef}>
+            <div className="stack stack-8">
+              {Object.entries(groupedBySource).map(([source, sourceArticles]) => (
+                <section key={source}>
+                  <div className="source-heading">
+                    <div className="source-heading__rule" />
+                    <h2 className="source-heading__name">{source}</h2>
+                    <span className="spacer" />
+                    <span className="source-heading__count">
+                      {sourceArticles.length}{" "}
+                      {sourceArticles.length === 1 ? "article" : "articles"}
+                    </span>
+                  </div>
+                  <ArticleGrid items={sourceArticles} />
+                </section>
+              ))}
+            </div>
           </div>
         ) : (
-          <ArticleGrid />
+          <div key={`cards-${forYou}`} className="results-anchor feed-results" ref={resultsRef}>
+            <ArticleGrid className="grid-cards--cards" />
+          </div>
+        )}
+
+        {!loading && total > 0 && (
+          <nav className="pagination" aria-label="Article pagination">
+            <button
+              type="button"
+              className="pagination__btn"
+              onClick={() => goToPage(Math.max(1, page - 1))}
+              disabled={page <= 1}
+            >
+              <ChevronLeft className="icon icon--sm" />
+              <span className="pagination__btn-label">Previous</span>
+            </button>
+
+            <span className="pagination__status">
+              Page {page} of {totalPages}
+              <span className="pagination__range">
+                Showing {firstShownOnPage}–{lastShownOnPage} of {total}
+              </span>
+            </span>
+
+            <button
+              type="button"
+              className="pagination__btn"
+              onClick={() => goToPage(page + 1)}
+              disabled={!hasMore}
+            >
+              <span className="pagination__btn-label">Next</span>
+              <ChevronRight className="icon icon--sm" />
+            </button>
+          </nav>
         )}
       </main>
     </div>
@@ -657,12 +1010,13 @@ const fetchArticles = useCallback(async ({ silent = false } = {}) => {
 
 /**
  * Article card. Renders the actual News schema fields: headline, summary,
- * bulletPoints, tags, category, source, date.
+ * bulletPoints, category, source, date.
  */
 function ArticleCard({ article, onClick }) {
-  const { headline, summary, bulletPoints, tags, topic, topicLabel, source, date, url } =
+  const { headline, summary, bulletPoints, topic, topicLabel, category, source, date, url } =
     article;
-  const displayTopicLabel = topicLabel || TOPIC_LABEL_BY_ID[topic] || "Other";
+  const displayTopicLabel =
+    category || topicLabel || TOPIC_LABEL_BY_ID[topic] || "Misc";
   const points = bulletPoints || [];
   const sourceClass = {
     "The Hindu": "article-card--the-hindu",
@@ -731,15 +1085,6 @@ function ArticleCard({ article, onClick }) {
           )}
         </div>
 
-        {tags?.length > 0 && (
-          <div className="article-card__tags">
-            {tags.slice(0, 3).map((tag) => (
-              <span key={tag} className={`badge badge--sm ${getTagClass(tag)}`}>
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
     </article>
   );

@@ -12,6 +12,9 @@ import Dashboard from "./pages/Dashboard";
 import Article from "./pages/Article";
 import NotFound from "./pages/NotFound";
 import Landing from "./pages/Landing";
+import Bookmarks from "./pages/Bookmarks";
+import Onboarding from "./pages/Onboarding";
+import Settings from "./pages/Settings";
 import "./index.css";
 
 const FullPageSpinner = ({ label = "Loading..." }) => (
@@ -48,13 +51,18 @@ function ProtectedRoute({ children }) {
  * instead of showing the login form again.
  */
 function PublicOnlyRoute({ children }) {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, isNewAccount, loading } = useAuth();
 
   if (loading) {
     return <FullPageSpinner />;
   }
 
-  return isAuthenticated ? <Navigate to="/dashboard" replace /> : children;
+  // A brand-new account goes on to pick its sources and topics first.
+  return isAuthenticated ? (
+    <Navigate to={isNewAccount ? "/welcome" : "/dashboard"} replace />
+  ) : (
+    children
+  );
 }
 
 function AppRoutes() {
@@ -90,6 +98,30 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Article />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/bookmarks"
+        element={
+          <ProtectedRoute>
+            <Bookmarks />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/welcome"
+        element={
+          <ProtectedRoute>
+            <Onboarding />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <Settings />
           </ProtectedRoute>
         }
       />

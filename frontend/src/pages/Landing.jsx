@@ -1,6 +1,6 @@
+import { Fragment } from "react";
 import { Link } from "react-router-dom";
 import {
-  Newspaper,
   Sparkles,
   BookOpen,
   SlidersHorizontal,
@@ -9,35 +9,43 @@ import {
   ArrowRight,
   Check,
   Rss,
+  Headphones,
+  Bookmark,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { NEWS_SOURCES, NEWS_TAGS } from "../constants/news";
+import { NEWS_SOURCES } from "../constants/news";
+import { SOURCE_PROFILES } from "../constants/sources";
 
 const FEATURES = [
   {
     icon: Sparkles,
     title: "AI summaries that respect the source",
-    text: "Short rule-based briefs instantly, plus Gemini-powered detailed summaries validated sentence-by-sentence. Thin or paywalled pages are marked unavailable, never invented.",
-  },
-  {
-    icon: BookOpen,
-    title: "Catch up in minutes",
-    text: "Every story ships with a short brief and key points, so you can scan the day's headlines from multiple sources without opening ten tabs.",
+    text: "Every story gets a short AI brief and key points, plus a detailed explainer when you want more, all written only from what the publisher reported. If a page is too thin or paywalled, we say so instead of guessing.",
   },
   {
     icon: SlidersHorizontal,
     title: "Filter by what matters to you",
-    text: "Fifteen broad categories and five topic tags — Polity, Economy, Defense, Science, International — with search, source, and category filters that combine.",
+    text: "Fifteen broad topics with search, source, and topic filters that combine.",
   },
   {
     icon: RefreshCw,
-    title: "Fresh every 15 minutes",
-    text: "A background scheduler ingests RSS around the clock and the dashboard re-polls every minute, so the day's headlines assemble themselves.",
+    title: "Fresh through the day",
+    text: "New stories arrive every 15 minutes from 5am to midnight, and your dashboard updates on its own. Each morning starts with a clean slate.",
   },
   {
     icon: ExternalLink,
     title: "Always traceable to the original",
-    text: "Each card links to the publisher page. Source text is extracted in memory for summarisation and discarded, never stored.",
+    text: "Every story links straight to the publisher's page, so the full report is one tap away.",
+  },
+  {
+    icon: Bookmark,
+    title: "Save stories for later",
+    text: "Bookmark anything that catches your eye and come back to it any time in the next 24 hours, even after the day's feed resets.",
+  },
+  {
+    icon: Headphones,
+    title: "Listen instead of read",
+    text: "Have the detailed summary read aloud, with each paragraph highlighted as it is spoken.",
   },
 ];
 
@@ -45,28 +53,28 @@ const STEPS = [
   {
     icon: Rss,
     step: "Step 1",
-    title: "We aggregate trusted RSS",
-    text: "The Hindu, Indian Express and Times of India feeds are fetched, deduplicated and filed under a stable feed registry.",
+    title: "We gather the headlines",
+    text: "Stories from The Hindu, Indian Express and Times of India are collected through the day, with duplicates removed.",
   },
   {
     icon: Sparkles,
     step: "Step 2",
     title: "AI distils the story",
-    text: "Deterministic rules write the instant brief; Gemini (Groq fallback) writes the detailed explainer with topic tags and category.",
+    text: "AI writes a short brief and key points for each story, and files it under one of fifteen topics.",
   },
   {
-    icon: Rss,
+    icon: BookOpen,
     step: "Step 3",
     title: "You read, not doomscroll",
-    text: "Read the brief and open the full story at the source when it matters.",
+    text: "Skim the briefs, go deeper on what interests you, and open the full story at the source when it matters.",
   },
 ];
 
 const STATS = [
   { value: "3", label: "Trusted publishers" },
-  { value: "15", label: "News categories" },
-  { value: "5", label: "Topic tags" },
-  { value: "15 min", label: "Ingest refresh" },
+  { value: "15", label: "News topics" },
+  { value: "15 min", label: "Between updates" },
+  { value: "24 h", label: "Saved stories kept" },
 ];
 
 export default function Landing() {
@@ -135,14 +143,14 @@ export default function Landing() {
             </div>
             <ul className="landing-meta">
               <li><Check className="icon icon--sm" /> Free to start</li>
-              <li><Check className="icon icon--sm" /> No credit card</li>
+              <li><Check className="icon icon--sm" /> Sign in with Google</li>
               <li><Check className="icon icon--sm" /> Original links included</li>
             </ul>
           </div>
           <div className="landing-visual" aria-hidden="true">
             <div className="mock">
               <div className="mock__row">
-                <span className="mock__pill">Polity</span>
+                <span className="mock__pill">Politics &amp; Governance</span>
                 <span className="mock__time">The Hindu - 2h ago</span>
               </div>
               <p className="mock__headline">Parliament clears bill to digitise land records nationwide</p>
@@ -152,8 +160,7 @@ export default function Landing() {
                 <span style={{ width: "64%" }} />
               </div>
               <div className="mock__row">
-                <span className="mock__pill mock__pill--soft">Economy</span>
-                <span className="mock__pill mock__pill--soft">World</span>
+                <span className="mock__pill mock__pill--soft">Law &amp; Judiciary</span>
                 <span className="mock__link">Read original</span>
               </div>
             </div>
@@ -185,7 +192,7 @@ export default function Landing() {
         <div className="container">
           <p className="landing-kicker">Why readers use CURA</p>
           <h2 className="landing-heading">Headlines to understanding in minutes</h2>
-          <p className="landing-lead">Aggregation and summarisation live in one place — quoted from the source, not the algorithm.</p>
+          <p className="landing-lead">Three newsrooms in one feed, explained in plain language and always linked back to the original.</p>
           <div className="landing-grid-3">
             {FEATURES.map((f) => (
               <article key={f.title} className="card card--pad landing-feature">
@@ -201,15 +208,20 @@ export default function Landing() {
       <section id="how" className="landing-section landing-section--tinted">
         <div className="container">
           <p className="landing-kicker">How it works</p>
-          <h2 className="landing-heading">From RSS feed to brief in three steps</h2>
-          <div className="landing-grid-3">
-            {STEPS.map((s) => (
-              <article key={s.title} className="card card--pad landing-step">
-                <span className="landing-feature__icon"><s.icon className="icon icon--xl" /></span>
-                <p className="landing-step__kicker">{s.step}</p>
-                <h3 className="landing-feature__title">{s.title}</h3>
-                <p className="landing-feature__text">{s.text}</p>
-              </article>
+          <h2 className="landing-heading">From headline to brief in three steps</h2>
+          <div className="landing-flow" aria-label="How it works steps">
+            {STEPS.map((s, i) => (
+              <Fragment key={s.title}>
+                <article className="card card--pad landing-step">
+                  <span className="landing-feature__icon"><s.icon className="icon icon--xl" /></span>
+                  <p className="landing-step__kicker">{s.step}</p>
+                  <h3 className="landing-feature__title">{s.title}</h3>
+                  <p className="landing-feature__text">{s.text}</p>
+                </article>
+                {i < STEPS.length - 1 && (
+                  <ArrowRight className="landing-flow__arrow" aria-hidden="true" />
+                )}
+              </Fragment>
             ))}
           </div>
         </div>
@@ -219,18 +231,18 @@ export default function Landing() {
         <div className="container">
           <p className="landing-kicker">Sources</p>
           <h2 className="landing-heading">Three newsrooms you already trust</h2>
-          <p className="landing-lead">Section-level RSS feeds with per-feed category hints and topic mapping. Every story links back to its publisher.</p>
+          <p className="landing-lead">Politics, business, sport, science and more from each paper's own sections. Every story links back to its publisher.</p>
           <div className="landing-grid-3">
             {NEWS_SOURCES.map((source) => (
-              <article key={source} className="card card--pad landing-source">
-                <span className="landing-feature__icon"><Newspaper className="icon icon--xl" /></span>
+              <article key={source} className="card card--pad landing-feature landing-source">
+                <div className="landing-source__logo">
+                  <img src={SOURCE_PROFILES[source]?.logo} alt={`${source} logo`} loading="lazy" />
+                </div>
                 <h3 className="landing-feature__title">{source}</h3>
-                <p className="landing-feature__text">National, business and world desks — deduplicated and refreshed through the day.</p>
+                <p className="landing-source__meta">{SOURCE_PROFILES[source]?.meta}</p>
+                <p className="landing-feature__text">{SOURCE_PROFILES[source]?.text}</p>
               </article>
             ))}
-          </div>
-          <div className="landing-tags" aria-label="Topic tags">
-            {NEWS_TAGS.map((tag) => (<span key={tag} className="landing-tag">{tag}</span>))}
           </div>
         </div>
       </section>
@@ -254,7 +266,6 @@ export default function Landing() {
             <span className="brand__name">CURA News</span>
           </div>
           <p>AI-powered news summaries from multiple trusted sources — with briefs and key points.</p>
-          
           <p className="landing-footer__copy">© {new Date().getFullYear()} CURA News. Summaries may contain inaccuracies.</p>
         </div>
       </footer>

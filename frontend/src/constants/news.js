@@ -1,10 +1,7 @@
 /**
  * Domain constants mirroring the backend enums.
  *
- * `NEWS_CATEGORIES` is the broad topic taxonomy (Politics, Business, ...). It is
- * deliberately separate from `NEWS_TAGS`, which is the general topic view
- * (Polity, Economy, Defense, ...). An article can be category "Tech" and tagged
- * "Science" at the same time.
+ * `NEWS_CATEGORIES` is the single topic taxonomy used throughout the app.
  *
  * Order matters: it drives the topic-card and chip-bar order on the dashboard
  * and must stay in sync with the backend's NEWS_CATEGORIES.
@@ -25,7 +22,7 @@ export const NEWS_CATEGORIES = [
   "Culture & Lifestyle",
   "Sports",
   "Entertainment",
-  "Other",
+  "Misc",
 ];
 export const TOPIC_LABELS = NEWS_CATEGORIES;
 export const TOPIC_LABEL_BY_ID = Object.fromEntries(
@@ -35,13 +32,13 @@ export const TOPIC_LABEL_BY_ID = Object.fromEntries(
   ]),
 );
 
-export const NEWS_TAGS = [
-  "Polity",
-  "Economy",
-  "Defense",
-  "Science",
-  "International",
-];
+/** Topic id (as stored in reader preferences) for each category label. */
+export const TOPIC_ID_BY_LABEL = Object.fromEntries(
+  Object.entries(TOPIC_LABEL_BY_ID).map(([id, label]) => [label, id]),
+);
+
+/** Topics offered in the For You picker: every category but the catch-all. */
+export const PICKABLE_TOPICS = NEWS_CATEGORIES.filter((label) => label !== "Misc");
 
 export const NEWS_SOURCES = [
   "The Hindu",
@@ -62,16 +59,10 @@ export const SEARCH_MIN_LENGTH = 3;
  * @returns {string} - The modifier class, or the neutral fallback
  */
 export const getCategoryClass = (category) => {
-  const slug = String(category || "").toLowerCase();
+  const slug = String(category || "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
   return slug ? `cat-${slug}` : "badge--gray";
-};
-
-/**
- * Maps a tag to its CSS modifier class.
- * @param {string} tag - A value from the backend tags enum
- * @returns {string} - The modifier class, or the neutral fallback
- */
-export const getTagClass = (tag) => {
-  const slug = String(tag || "").toLowerCase();
-  return slug ? `tag-${slug}` : "badge--gray";
 };
