@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Bookmark, ExternalLink, Loader, Trash2 } from "lucide-react";
 import { bookmarkAPI } from "../services/api";
 import { formatExpiry, getErrorMessage } from "../utils/format";
+import DetailedBadge from "../components/DetailedBadge";
 
 const PAGE_SIZE = 20;
 
@@ -108,6 +109,7 @@ export default function Bookmarks() {
                     <span>{article.source || "News"}</span>
                     <span>{article.topicLabel || article.category || "Misc"}</span>
                     <span>{formatExpiry(article.expiresAt)}</span>
+                    <DetailedBadge status={article.detailedStatus} />
                   </div>
                   <h3 className="article-card__title">{article.headline}</h3>
                   <p className="article-card__summary">{article.gist || article.summary}</p>

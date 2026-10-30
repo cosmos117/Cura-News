@@ -16,6 +16,7 @@ import {
   ExternalLink,
   Bookmark,
   Share2,
+  Check,
 } from "lucide-react";
 
 const TABS = [
@@ -377,6 +378,9 @@ export default function Article() {
                 >
                   <Icon className="icon icon--md" />
                   <span className="tab__label">{tab.label}</span>
+                  {tab.id === "detailed" && article.detailedStatus === "DONE" && (
+                    <Check className="icon icon--sm tab__ready" aria-label="ready" />
+                  )}
                 </button>
               );
             })}

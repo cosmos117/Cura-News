@@ -14,6 +14,7 @@
  * model variance; the prompt itself asks for the tighter range.
  */
 
+import { DETAILED_WORDS } from "../../utils/formatDetailedText.js";
 import { z } from "zod";
 import {
   TIER_FULL,
@@ -97,14 +98,16 @@ const keyFactSchema = z
 
 /**
  * detailed is null when the source text cannot support a 100-120 word
- * narrative. When present it must be 100-120 words in exactly 2 paragraphs.
+ * narrative. When present it must be 90-130 words (the prompt asks for 100-120)
+ * in exactly 2 paragraphs.
  */
 const detailedSchema = z
   .string()
   .trim()
   .refine(
-    (value) => countWords(value) >= 100 && countWords(value) <= 120,
-    "detailed must be 100-120 words",
+    (value) =>
+      countWords(value) >= DETAILED_WORDS.min && countWords(value) <= DETAILED_WORDS.max,
+    `detailed must be ${DETAILED_WORDS.min}-${DETAILED_WORDS.max} words`,
   )
   .refine(
     (value) => {

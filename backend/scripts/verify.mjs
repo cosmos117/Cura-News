@@ -81,7 +81,19 @@ async function main() {
   await check("detailed text formatter rejects a narrative outside the word budget", async () => {
     const result = formatDetailedText("A short sentence. Another one.");
     assert.equal(result.valid, false);
-    assert.equal(result.reason, "detailed must be 100-120 words");
+    assert.equal(result.reason, "detailed must be 90-130 words (got 5)");
+  });
+
+  await check("detailed text formatter trims an over-long narrative at a sentence boundary", async () => {
+    const sentence = "The committee reviewed the proposal in detail and asked the ministry for more data on costs.";
+    const long = `${Array(5).fill(sentence).join(" ")}
+
+${Array(5).fill(sentence).join(" ")}`;
+    const result = formatDetailedText(long);
+    assert.equal(result.valid, true, result.reason);
+    assert.ok(result.wordCount <= 130 && result.wordCount >= 90, `${result.wordCount} words`);
+    assert.equal(result.paragraphs.length, 2);
+    assert.match(result.text, /costs\.$/, "ends on a complete sentence");
   });
 
   mongod = await MongoMemoryServer.create();
@@ -93,7 +105,10 @@ async function main() {
   // Pinned explicitly: dotenv does not override already-set vars, so these win
   // over any local .env and the assertions below stay deterministic.
   process.env.AI_PROVIDER = "gemini";
-  process.env.GEMINI_MODEL = "gemini-3.8-flash";
+  // One model per provider keeps the scheduling tests readable; the pool
+  // tests set longer lists for their own duration.
+  process.env.GEMINI_MODELS = "gemini-3.8-flash";
+  process.env.GROQ_MODELS = "openai/gpt-oss-120b";
   // Fake AI keys: both providers count as configured, but nothing in the suite
   // can spend real quota. Tests that need AI replies stub axios.post.
   process.env.GEMINI_API_KEY = "test-gemini-key";
@@ -261,7 +276,7 @@ async function main() {
       const first = await askAi("interactive");
       assert.equal(first.ok, 1);
       assert.equal(first.__aiMeta.provider, "groq");
-      assert.equal(first.__aiMeta.modelUsed, aiEnv.GROQ_MODEL);
+      assert.equal(first.__aiMeta.modelUsed, "openai/gpt-oss-120b");
       assert.deepEqual(aiCalls, ["gemini", "groq"]);
       // At default effort gpt-oss can spend its whole output budget reasoning
       // and return an empty answer.
@@ -351,6 +366,157 @@ async function main() {
       ["https://a.vercel.app", "http://localhost:3000", "https://b.example.com"],
     );
     assert.deepEqual(parseAllowedOrigins(""), []);
+  });
+
+  // ---------- model pool ----------
+  // A per-model stub: replies[model] returns a reply or throws. `poolCalls`
+  // records "provider:model" for every request in order.
+  const poolCalls = [];
+  const poolBodies = [];
+  const stubPool = (replies) => {
+    aiService.resetAiRateState();
+    poolCalls.length = 0;
+    poolBodies.length = 0;
+    axios.post = async (url, body) => {
+      const provider = providerOf(url);
+      const model = provider === "groq" ? body.model : String(url).match(/models\/([^:]+):/)[1];
+      poolCalls.push(`${provider}:${model}`);
+      poolBodies.push({ model, body });
+      if (!replies[model]) throw httpError(500, { error: { message: "no stub" } });
+      return replies[model](body);
+    };
+  };
+  const withPool = async (models, run) => {
+    const saved = { gemini: aiEnv.GEMINI_MODELS, groq: aiEnv.GROQ_MODELS };
+    aiEnv.GEMINI_MODELS = models.gemini;
+    aiEnv.GROQ_MODELS = models.groq;
+    try {
+      await run();
+    } finally {
+      aiEnv.GEMINI_MODELS = saved.gemini;
+      aiEnv.GROQ_MODELS = saved.groq;
+      unstubAi();
+    }
+  };
+
+  await check("the pool moves on to the next model when one runs out, and skips models that are gone", async () => {
+    await withPool({ gemini: "gm-a,gm-b", groq: "gq-gone,gq-ok" }, async () => {
+      let gmBLeft = 1;
+      stubPool({
+        "gm-a": geminiDailyQuotaUsed,
+        "gm-b": () => (gmBLeft-- > 0 ? aiReply("gemini", { ok: "b" }) : geminiDailyQuotaUsed()),
+        "gq-gone": () => {
+          throw httpError(404, { error: { code: "model_not_found", message: "The model `gq-gone` does not exist" } });
+        },
+        "gq-ok": () => aiReply("groq", { ok: "groq" }),
+      });
+
+      const first = await askAi("interactive");
+      assert.equal(first.ok, "b");
+      assert.equal(first.__aiMeta.modelUsed, "gm-b");
+      assert.deepEqual(poolCalls, ["gemini:gm-a", "gemini:gm-b"]);
+
+      poolCalls.length = 0;
+      const second = await askAi("interactive");
+      assert.equal(second.ok, "groq", "gm-b's quota is now used up too");
+      assert.deepEqual(poolCalls, ["gemini:gm-b", "groq:gq-gone", "groq:gq-ok"], "gm-a stays paused");
+
+      poolCalls.length = 0;
+      await askAi("interactive");
+      assert.deepEqual(poolCalls, ["groq:gq-ok"], "spent and missing models are skipped");
+
+      const usage = aiService.getAiUsage();
+      assert.equal(usage["gemini:gm-a"].rateLimited, 1);
+      assert.equal(usage["groq:gq-gone"].failed, 1);
+      assert.equal(usage["groq:gq-ok"].ok, 2);
+    });
+  });
+
+  await check("each model gets the request options it accepts", async () => {
+    await withPool(
+      { gemini: "gm-flash,gemini-x-flash-lite", groq: "openai/gpt-oss-20b,qwen/qwen3.8-27b" },
+      async () => {
+        let liteSeen = false;
+        stubPool({
+          // Rejects the "thinking off" setting, like gemini-3.5-flash-lite does.
+          "gm-flash": (body) => {
+            if (body.generationConfig.thinkingConfig) {
+              throw httpError(400, { error: { message: "Request contains an invalid argument." } });
+            }
+            return aiReply("gemini", { ok: "flash" });
+          },
+          "gemini-x-flash-lite": (body) => {
+            liteSeen = !body.generationConfig.thinkingConfig;
+            return aiReply("gemini", { ok: "lite" });
+          },
+          "openai/gpt-oss-20b": () => aiReply("groq", { ok: "oss" }),
+          "qwen/qwen3.8-27b": () => aiReply("groq", { ok: "qwen" }),
+        });
+
+        assert.equal((await askAi("interactive")).ok, "flash");
+        assert.deepEqual(poolCalls, ["gemini:gm-flash", "gemini:gm-flash"], "retried once without the setting");
+        poolCalls.length = 0;
+        await askAi("interactive");
+        assert.deepEqual(poolCalls, ["gemini:gm-flash"], "and remembers it");
+        assert.equal(poolBodies.at(-1).body.generationConfig.thinkingConfig, undefined);
+
+        aiEnv.GEMINI_MODELS = "gemini-x-flash-lite";
+        await askAi("interactive");
+        assert.equal(liteSeen, true, "flash-lite models never get the thinking setting");
+
+        aiEnv.GEMINI_MODELS = "";
+        aiEnv.GEMINI_API_KEY = "";
+        try {
+          aiService.resetAiRateState();
+          await askAi("interactive");
+          assert.equal(poolBodies.at(-1).body.reasoning_effort, "low", "gpt-oss reasons briefly");
+          aiEnv.GROQ_MODELS = "qwen/qwen3.8-27b";
+          await askAi("interactive");
+          assert.equal(poolBodies.at(-1).body.reasoning_effort, "none", "qwen3 does not reason");
+        } finally {
+          aiEnv.GEMINI_API_KEY = "test-gemini-key";
+        }
+      },
+    );
+  });
+
+  await check("detailed summaries reject figures the article never states", async () => {
+    const { unsupportedNumbers } = await import("../src/services/detailedSummaryService.js");
+    const source = "Inflation eased to 4.8 per cent. About 1,20,000 jobs were added in 2026 across seven cities.";
+    assert.deepEqual(
+      unsupportedNumbers("Inflation eased to 4.80 per cent as 120000 jobs came in 2026 in 7 cities.", source),
+      [],
+      "same figures written differently, and small counts, are fine",
+    );
+    assert.deepEqual(unsupportedNumbers("About 2,000 homes and 45% of jobs were affected.", source), ["2000", "45"]);
+  });
+
+  await check("ingest stores at most INGEST_MAX_PER_RUN per run, papers taking turns, newest first", async () => {
+    const { config: pipelineConfig } = await import("../src/config/env.js");
+    const saved = pipelineConfig.INGEST_MAX_PER_RUN;
+    const at = (minutesAgo) => new Date(Date.now() - minutesAgo * 60000);
+    const articles = [
+      ...Array.from({ length: 20 }, (_, i) => ({ source: "Times of India", url: `t${i}`, publishedAt: at(i) })),
+      ...Array.from({ length: 5 }, (_, i) => ({ source: "The Hindu", url: `h${i}`, publishedAt: at(i) })),
+      ...Array.from({ length: 5 }, (_, i) => ({ source: "Indian Express", url: `e${i}`, publishedAt: at(i) })),
+    ];
+    try {
+      pipelineConfig.INGEST_MAX_PER_RUN = 20;
+      const { selected, deferred } = newsProcessor._capForRun(articles);
+      assert.equal(selected.length, 20);
+      assert.equal(deferred, 10);
+      const count = (source) => selected.filter((a) => a.source === source).length;
+      assert.equal(count("The Hindu"), 5);
+      assert.equal(count("Indian Express"), 5);
+      assert.equal(count("Times of India"), 10);
+      const toi = selected.filter((a) => a.source === "Times of India").map((a) => a.url);
+      assert.deepEqual(toi.sort(), Array.from({ length: 10 }, (_, i) => `t${i}`).sort(), "the newest ten");
+
+      pipelineConfig.INGEST_MAX_PER_RUN = 0;
+      assert.equal(newsProcessor._capForRun(articles).selected.length, 30, "0 means no cap");
+    } finally {
+      pipelineConfig.INGEST_MAX_PER_RUN = saved;
+    }
   });
 
   // ---------- short summaries (no AI) ----------
@@ -630,7 +796,8 @@ async function main() {
     // The providers that actually back AI_PROVIDER. OPENAI_MODEL used to be
     // asserted here, but no code path calls OpenAI any more.
     assert.equal(config.AI_PROVIDER, "gemini");
-    assert.equal(config.GEMINI_MODEL, "gemini-3.8-flash");
+    assert.equal(config.GEMINI_MODELS, "gemini-3.8-flash");
+    assert.equal(config.GEMINI_MODEL, undefined, "replaced by the GEMINI_MODELS pool");
     assert.equal(config.OPENAI_MODEL, undefined);
     assert.equal(config.NEWS_API_KEY, undefined);
   });

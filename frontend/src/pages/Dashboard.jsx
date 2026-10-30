@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { newsAPI, bookmarkAPI } from "../services/api";
 import SourceLogo from "../components/SourceLogo";
+import DetailedBadge from "../components/DetailedBadge";
 import {
   NEWS_CATEGORIES,
   TOPIC_LABEL_BY_ID,
@@ -1042,8 +1043,11 @@ function ArticleCard({ article, onClick }) {
     >
       <div className="article-card__body">
         <div className="row row--between row-2 article-card__meta">
-          <span className={`badge ${getCategoryClass(displayTopicLabel)}`}>
-            {displayTopicLabel}
+          <span className="row row-1 article-card__badges">
+            <span className={`badge ${getCategoryClass(displayTopicLabel)}`}>
+              {displayTopicLabel}
+            </span>
+            <DetailedBadge status={article.detailedStatus} />
           </span>
           <span className="row row-1 article-card__time">
             <Calendar className="icon icon--sm" />

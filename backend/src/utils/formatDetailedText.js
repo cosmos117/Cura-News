@@ -28,6 +28,9 @@ const ABBREVIATIONS = new Set([
   "sen.",
 ]);
 
+/** Accepted length of a detailed narrative, in words. */
+export const DETAILED_WORDS = Object.freeze({ min: 90, max: 130 });
+
 export const wordCount = (value) => value.split(/\s+/).filter(Boolean).length;
 
 const normalizeSpacing = (value) => {
@@ -115,7 +118,13 @@ export function formatDetailedText(raw, { minParagraphs = 2, maxParagraphs = 3 }
   const normalized = normalizeSpacing(raw);
   if (!normalized) return { valid: false, reason: "empty" };
 
-  const sentences = splitSentences(normalized);
+  let sentences = splitSentences(normalized);
+  // Models overshoot word counts far more often than they undershoot. Rather
+  // than spend another AI call, drop whole sentences from the end until the
+  // narrative fits; what remains still ends on a complete sentence.
+  while (sentences.length > 2 && wordCount(sentences.join(" ")) > DETAILED_WORDS.max) {
+    sentences = sentences.slice(0, -1);
+  }
   const lastCharacter = normalized.at(-1);
   if (!/[.!?]["'»”’)\]]?$/.test(lastCharacter ? normalized : "")) {
     return { valid: false, reason: "truncated" };
@@ -129,8 +138,10 @@ export function formatDetailedText(raw, { minParagraphs = 2, maxParagraphs = 3 }
   }
   const text = paragraphs.join("\n\n");
   const words = wordCount(text);
-  if (words < 100 || words > 120) {
-    return { valid: false, reason: "detailed must be 100-120 words" };
+  // The prompt asks for 100-120 words; 90-130 is accepted so a slightly short
+  // answer does not cost a second AI call.
+  if (words < DETAILED_WORDS.min || words > DETAILED_WORDS.max) {
+    return { valid: false, reason: `detailed must be ${DETAILED_WORDS.min}-${DETAILED_WORDS.max} words (got ${words})` };
   }
   return { valid: true, text, paragraphs, wordCount: words };
 }

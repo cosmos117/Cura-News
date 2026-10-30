@@ -47,6 +47,8 @@ class PipelineLogger {
       failed: 0,
       duplicates: 0,
       skippedOutsideRetention: 0,
+      // New articles left for the next run because of INGEST_MAX_PER_RUN
+      deferred: 0,
       // How each short summary was written, e.g. { extractive: 12, "publisher-page": 30 }
       summaryMethods: {},
       // Page fetches per source: { ok, thin, robots, failed, skipped }
@@ -165,10 +167,19 @@ class NewsProcessor {
           `✅ ${uniqueArticles.length} unique articles (${this.logger.stats.duplicates} duplicates skipped)`,
         );
 
-        // Step 3: Summarize and enrich with AI
-        this.logger.info("🤖 Step 3: AI summarization and enrichment");
+        const { selected, deferred } = this._capForRun(uniqueArticles);
+        this.logger.stats.deferred = deferred;
+        if (deferred) {
+          this.logger.info(
+            `⏳ Storing ${selected.length} this run; ${deferred} wait for the next run`,
+            { cap: config.INGEST_MAX_PER_RUN },
+          );
+        }
+
+        // Step 3: Short summaries and topics (no AI for summaries)
+        this.logger.info("📝 Step 3: Short summaries and topics");
         const summarizedArticles = await this._summarizeArticles(
-          uniqueArticles,
+          selected,
           dryRun
             ? null
             : async (batch) => {
@@ -273,6 +284,42 @@ class NewsProcessor {
       });
       return articles; // Return all if dedup fails
     }
+  }
+
+  /**
+   * Keep a run to INGEST_MAX_PER_RUN new articles. Papers take turns, newest
+   * story first, so one busy paper cannot crowd out the others. The rest are
+   * not lost: they are picked up by the next run while still in the feeds.
+   *
+   * @returns {{ selected: Object[], deferred: number }}
+   */
+  _capForRun(articles) {
+    const cap = config.INGEST_MAX_PER_RUN;
+    if (!cap || articles.length <= cap) return { selected: articles, deferred: 0 };
+
+    const queues = new Map();
+    const newestFirst = [...articles].sort(
+      (a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0),
+    );
+    for (const article of newestFirst) {
+      if (!queues.has(article.source)) queues.set(article.source, []);
+      queues.get(article.source).push(article);
+    }
+
+    const selected = [];
+    while (selected.length < cap) {
+      let took = false;
+      for (const queue of queues.values()) {
+        if (selected.length >= cap) break;
+        const next = queue.shift();
+        if (next) {
+          selected.push(next);
+          took = true;
+        }
+      }
+      if (!took) break;
+    }
+    return { selected, deferred: articles.length - selected.length };
   }
 
   /**

@@ -126,6 +126,23 @@ const todayStart = () => startOfUtcDay();
 
 const isRateLimitedError = (error) => error?.statusCode === 429;
 
+const numbersIn = (text) =>
+  (String(text).match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map((value) =>
+    String(Number(value.replace(/,/g, ""))),
+  );
+
+/**
+ * Figures in the narrative that the article never states: a guard against
+ * the smaller free models inventing numbers. Counts up to 10 are left out,
+ * since the article may spell them as words ("seven").
+ */
+export const unsupportedNumbers = (narrative, source) => {
+  const known = new Set(numbersIn(source));
+  return [...new Set(numbersIn(narrative))].filter(
+    (value) => Number(value) > 10 && !known.has(value),
+  );
+};
+
 /**
  * No AI capacity right now. Distinct from FAILED: nothing is wrong with the
  * article, so callers must leave it retryable rather than record a failure.
@@ -213,12 +230,21 @@ export async function generateDetailedSummary(article, { priority = "background"
     article.summary,
     ...(article.keyFacts?.length ? article.keyFacts : article.bulletPoints || []),
   ];
-  const overlapReason = () =>
-    hasHighSourceOverlap(output.detailed, extracted.text)
-      ? "Detailed summary was too similar to the source text"
-      : hasHighNgramOverlap(output.detailed, references)
-        ? "Detailed summary repeated the stored summary or key facts"
-        : null;
+  const overlapReason = () => {
+    if (hasHighSourceOverlap(output.detailed, extracted.text)) {
+      return "Detailed summary was too similar to the source text";
+    }
+    if (hasHighNgramOverlap(output.detailed, references)) {
+      return "Detailed summary repeated the stored summary or key facts";
+    }
+    const invented = unsupportedNumbers(output.detailed, extracted.text);
+    if (invented.length) {
+      return `Detailed summary used figures that are not in the article (${invented
+        .slice(0, 3)
+        .join(", ")}); use only figures stated in the text`;
+    }
+    return null;
+  };
   const overlap = overlapReason();
   if (overlap) {
     try {

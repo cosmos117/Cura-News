@@ -1,7 +1,6 @@
 /**
- * AI Summarization Service
- * Converts raw news articles from various sources into structured summaries
- * Uses Gemini (primary) / Groq (fallback) with structured JSON output
+ * AI service: one entry point (generateStructured) over a pool of free models
+ * from Groq and Gemini, returning parsed JSON.
  */
 
 import axios from "axios";
@@ -13,65 +12,90 @@ const env = config;
 export const RATE_LIMITED_MESSAGE = "AI providers are temporarily rate-limited";
 
 // ---------------------------------------------------------------------------
-// Provider scheduling
+// Model pool
 //
-// Every AI call goes through generateStructured, which picks a provider per
-// call rather than always hitting the primary first:
+// Free tiers limit each MODEL separately, so every model on a key is its own
+// slot with its own quota. A call goes to the first slot, in preference order,
+// that has room right now:
 //
-//  - Each provider has its own cooldown. A 429 from Gemini never blocks Groq,
-//    and the provider's own retry hint is honoured (Gemini's free tier answers
-//    a used-up daily quota with "retry in 18h"; retrying sooner only fails).
-//  - Calls are paced to stay inside the limits, so 429s are rare: a
-//    requests-per-minute window per provider, plus the token-per-minute and
-//    request-per-day budgets Groq reports in its response headers.
-//  - Readers come first. Background work (ingest, the detailed batch) leaves a
-//    reserve of capacity untouched and pauses while a reader is waiting, so a
-//    burst of ingestion cannot make a reader's request fail.
+//  - Each slot has its own cooldown. A 429 honours the provider's retry hint
+//    (Gemini answers a used-up daily quota with "retry in 13h"), so a spent
+//    model is skipped instead of retried.
+//  - Calls are paced per slot: requests per minute, plus Groq's tokens-per-
+//    minute and requests-per-day budgets read from its response headers.
+//  - Models that no longer exist ("not found", "decommissioned") are disabled
+//    for a few hours and logged, so a stale model list cannot break anything.
+//  - Readers come first: background work leaves capacity free and pauses
+//    while a reader is waiting.
 //
 // State is in memory: a restart clears it and the next calls re-learn limits.
 // ---------------------------------------------------------------------------
+
+// Free-tier models measured on this project's keys (October 2026), best first.
+// Override with GROQ_MODELS / GEMINI_MODELS (comma-separated) when they change.
+const DEFAULT_MODELS = {
+  groq: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
+  gemini: [
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
+  ],
+};
 
 const MINUTE_MS = 60_000;
 // Without a retry hint: 30s, doubling per consecutive 429, capped at 5 min.
 const BASE_COOLDOWN_MS = 30_000;
 const MAX_DEFAULT_COOLDOWN_MS = 5 * MINUTE_MS;
 const MAX_COOLDOWN_MS = 24 * 60 * MINUTE_MS;
+// A model the provider says is gone is retried after this long.
+const UNAVAILABLE_MODEL_MS = 6 * 60 * MINUTE_MS;
 // How long a call may wait for capacity before giving up with a 429.
 const INTERACTIVE_MAX_WAIT_MS = 20_000;
 const BACKGROUND_MAX_WAIT_MS = 3 * MINUTE_MS;
 // Per-minute request slots background calls leave free for readers.
 const INTERACTIVE_RPM_RESERVE = 2;
-const MAX_PROVIDER_ATTEMPTS = 4;
 
-const createProviderState = () => ({
+const createSlotState = (model) => ({
   cooldownUntil: 0,
+  disabledUntil: 0,
   strikes: 0,
   recentCalls: [], // dispatch times within the last minute
   pendingTokens: 0, // estimated tokens of calls still in flight
   tokens: null, // per-minute token budget, from response headers
   requests: null, // per-day request budget, from response headers
+  // Gemini flash-lite models reject the "thinking off" setting (and do not
+  // think anyway); other models learn this on their first 400.
+  omitThinking: /flash-lite/i.test(model),
+  usage: { ok: 0, rateLimited: 0, failed: 0 },
 });
 
-let providerState = {
-  gemini: createProviderState(),
-  groq: createProviderState(),
-};
+let slotState = new Map();
 let readersWaiting = 0;
+
+const stateOf = (slot) => {
+  if (!slotState.has(slot.key)) slotState.set(slot.key, createSlotState(slot.model));
+  return slotState.get(slot.key);
+};
 
 /** Forget every cooldown and learned limit. Used by the test suite. */
 export const resetAiRateState = () => {
-  providerState = { gemini: createProviderState(), groq: createProviderState() };
+  slotState = new Map();
   readersWaiting = 0;
 };
+
+/** Calls per model since the last restart: { "groq:openai/gpt-oss-120b": { ok, rateLimited, failed } }. */
+export const getAiUsage = () =>
+  Object.fromEntries([...slotState].map(([key, state]) => [key, { ...state.usage }]));
 
 const PROVIDERS = {
   gemini: {
     isConfigured: () => Boolean(env.GEMINI_API_KEY),
-    model: () => env.GEMINI_MODEL,
-    rpm: () => env.GEMINI_RPM,
-    async call({ systemPrompt, userPrompt, maxTokens, temperature }) {
+    async call({ model, systemPrompt, userPrompt, maxTokens, temperature, omitThinking }) {
       const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
         {
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents: [{ role: "user", parts: [{ text: userPrompt }] }],
@@ -79,7 +103,7 @@ const PROVIDERS = {
             temperature,
             maxOutputTokens: maxTokens,
             responseMimeType: "application/json",
-            thinkingConfig: { thinkingBudget: 0 },
+            ...(omitThinking ? {} : { thinkingConfig: { thinkingBudget: 0 } }),
           },
         },
         { timeout: 30000 },
@@ -94,24 +118,25 @@ const PROVIDERS = {
   },
   groq: {
     isConfigured: () => Boolean(env.GROQ_API_KEY),
-    model: () => env.GROQ_MODEL,
-    rpm: () => env.GROQ_RPM,
-    async call({ systemPrompt, userPrompt, maxTokens, temperature }) {
+    async call({ model, systemPrompt, userPrompt, maxTokens, temperature }) {
+      // Reasoning models can spend the whole max_tokens budget thinking and
+      // return an empty answer. These structured tasks need little of it.
+      const reasoning = /gpt-oss/i.test(model)
+        ? { reasoning_effort: "low" }
+        : /qwen3/i.test(model)
+          ? { reasoning_effort: "none" }
+          : {};
       const response = await axios.post(
         "https://api.groq.com/openai/v1/chat/completions",
         {
-          model: env.GROQ_MODEL,
+          model,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
           temperature,
           max_tokens: maxTokens,
-          // gpt-oss models reason before answering, and at the default effort
-          // that reasoning can use the whole max_tokens budget, leaving an
-          // empty answer (finish_reason "length"). Low effort answers these
-          // structured tasks in a few hundred tokens.
-          ...(/gpt-oss/i.test(env.GROQ_MODEL) ? { reasoning_effort: "low" } : {}),
+          ...reasoning,
         },
         {
           headers: {
@@ -131,11 +156,34 @@ const PROVIDERS = {
   },
 };
 
-/** Configured providers, preferred (AI_PROVIDER) first. */
-const providerOrder = () => {
+const parseModelList = (value) =>
+  String(value || "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+const modelsFor = (provider) => {
+  const listed = parseModelList(provider === "groq" ? env.GROQ_MODELS : env.GEMINI_MODELS);
+  return listed.length ? listed : DEFAULT_MODELS[provider];
+};
+
+/** Every usable slot, preferred provider (AI_PROVIDER) first, then model order. */
+const slots = () => {
   const primary = env.AI_PROVIDER.toLowerCase() === "groq" ? "groq" : "gemini";
   const fallback = primary === "groq" ? "gemini" : "groq";
-  return [primary, fallback].filter((name) => PROVIDERS[name].isConfigured());
+  return [primary, fallback]
+    .filter((provider) => PROVIDERS[provider].isConfigured())
+    .flatMap((provider) =>
+      modelsFor(provider).map((model) => ({ provider, model, key: `${provider}:${model}` })),
+    );
+};
+
+/** Requests per minute for a slot: an override from env, else the free-tier figure. */
+const slotRpm = ({ provider, model }) => {
+  const override = Number(provider === "groq" ? env.GROQ_RPM : env.GEMINI_RPM);
+  if (override > 0) return override;
+  if (provider === "groq") return 30;
+  return /flash-lite/i.test(model) ? 15 : 5;
 };
 
 /**
@@ -188,8 +236,8 @@ const bucketWaitMs = (bucket, needed, now) => {
   return Math.ceil((target - level) / refillPerMs);
 };
 
-const updateBuckets = (name, headers, now) => {
-  const state = providerState[name];
+const updateBuckets = (slot, headers, now) => {
+  const state = stateOf(slot);
   state.tokens = readBucket(headers, "tokens", now) ?? state.tokens;
   state.requests = readBucket(headers, "requests", now) ?? state.requests;
 };
@@ -198,14 +246,14 @@ const updateBuckets = (name, headers, now) => {
 const estimateTokens = (systemPrompt, userPrompt, maxTokens) =>
   Math.ceil((String(systemPrompt).length + String(userPrompt).length) / 4) + maxTokens;
 
-/** Milliseconds until `name` can take a call of this priority and size (0 = now). */
-const providerWaitMs = (name, priority, estimate, now) => {
-  const state = providerState[name];
+/** Milliseconds until `slot` can take a call of this priority and size (0 = now). */
+const slotWaitMs = (slot, priority, estimate, now) => {
+  const state = stateOf(slot);
   const reader = priority === "interactive";
-  let wait = Math.max(0, state.cooldownUntil - now);
+  let wait = Math.max(0, state.cooldownUntil - now, state.disabledUntil - now);
 
   state.recentCalls = state.recentCalls.filter((at) => now - at < MINUTE_MS);
-  const rpm = Math.max(1, Number(PROVIDERS[name].rpm()) || 1);
+  const rpm = Math.max(1, slotRpm(slot));
   const rpmLimit = reader ? rpm : Math.max(1, rpm - INTERACTIVE_RPM_RESERVE);
   if (state.recentCalls.length >= rpmLimit) {
     const freesSlot = state.recentCalls[state.recentCalls.length - rpmLimit];
@@ -240,37 +288,38 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @returns {{ available: boolean, retryAfterMs: number|null }}
  */
 export const getAiAvailability = (priority = "interactive") => {
-  const order = providerOrder();
-  if (!order.length) return { available: false, retryAfterMs: null };
+  const pool = slots();
+  if (!pool.length) return { available: false, retryAfterMs: null };
   const now = Date.now();
-  const soonest = Math.min(...order.map((name) => providerWaitMs(name, priority, 0, now)));
+  const soonest = Math.min(...pool.map((slot) => slotWaitMs(slot, priority, 0, now)));
   const maxWait = priority === "interactive" ? INTERACTIVE_MAX_WAIT_MS : BACKGROUND_MAX_WAIT_MS;
   return { available: soonest <= maxWait, retryAfterMs: soonest };
 };
 
 /**
- * Wait for a provider with capacity and reserve it. Throws a 429 straight away
+ * Wait for a slot with capacity and reserve it. Throws a 429 straight away
  * when the wait would exceed the priority's limit, rather than sleeping first.
+ * Returns null when every slot has already failed this call.
  */
-const acquireProvider = async (priority, estimate, excluded) => {
+const acquireSlot = async (priority, estimate, excluded) => {
   const reader = priority === "interactive";
   const deadline = Date.now() + (reader ? INTERACTIVE_MAX_WAIT_MS : BACKGROUND_MAX_WAIT_MS);
   if (reader) readersWaiting += 1;
   try {
     for (;;) {
-      const candidates = providerOrder().filter((name) => !excluded.has(name));
+      const candidates = slots().filter((slot) => !excluded.has(slot.key));
       if (!candidates.length) return null;
 
       const now = Date.now();
-      const waits = candidates.map((name) => providerWaitMs(name, priority, estimate, now));
+      const waits = candidates.map((slot) => slotWaitMs(slot, priority, estimate, now));
       // Background work steps aside while any reader is queued.
       const mustYield = !reader && readersWaiting > 0;
       const ready = mustYield ? -1 : waits.indexOf(0);
       if (ready !== -1) {
-        const name = candidates[ready];
-        providerState[name].recentCalls.push(now);
-        providerState[name].pendingTokens += estimate;
-        return name;
+        const slot = candidates[ready];
+        stateOf(slot).recentCalls.push(now);
+        stateOf(slot).pendingTokens += estimate;
+        return slot;
       }
 
       const soonest = Math.min(...waits);
@@ -289,6 +338,17 @@ const acquireProvider = async (priority, estimate, excluded) => {
 const isRateLimitError = (error) =>
   error?.response?.status === 429 || error?.status === 429;
 
+/** The provider says this model does not exist (any more) for this key. */
+const isUnavailableModel = (error) => {
+  const status = error?.response?.status;
+  const body = error?.response?.data?.error;
+  const text = `${body?.code || ""} ${body?.message || ""}`;
+  return (
+    status === 404 ||
+    /model_not_found|model_decommissioned|decommissioned|no longer available|does not exist/i.test(text)
+  );
+};
+
 /** Retry hint of a 429: Retry-After header, Gemini RetryInfo, or "retry in 7.5s" text. */
 const retryHintMs = (error) => {
   const fromHeader = parseDurationMs(error?.response?.headers?.["retry-after"]);
@@ -304,8 +364,8 @@ const retryHintMs = (error) => {
   return match ? parseDurationMs(match[1]) : null;
 };
 
-const markRateLimited = (name, error, now) => {
-  const state = providerState[name];
+const markRateLimited = (slot, error, now) => {
+  const state = stateOf(slot);
   state.strikes += 1;
   const hinted = retryHintMs(error);
   const cooldownMs = Math.min(
@@ -316,18 +376,37 @@ const markRateLimited = (name, error, now) => {
     MAX_COOLDOWN_MS,
   );
   state.cooldownUntil = Math.max(state.cooldownUntil, now + cooldownMs);
-  console.warn(
-    `AI provider ${name} rate-limited; pausing it for ${Math.round(cooldownMs / 1000)}s`,
-  );
+  console.warn(`AI model ${slot.key} rate-limited; pausing it for ${Math.round(cooldownMs / 1000)}s`);
 };
 
 /**
- * Generate and parse a structured JSON response using the shared AI client.
+ * Call one slot. A Gemini model that rejects the "thinking off" setting with a
+ * 400 is retried once without it, and remembers that for later calls.
+ */
+const callSlot = async (slot, args) => {
+  const state = stateOf(slot);
+  const run = () =>
+    PROVIDERS[slot.provider].call({ ...args, model: slot.model, omitThinking: state.omitThinking });
+  try {
+    return await run();
+  } catch (error) {
+    const rejectedSetting =
+      slot.provider === "gemini" &&
+      !state.omitThinking &&
+      error?.response?.status === 400 &&
+      /invalid argument/i.test(error?.response?.data?.error?.message || "");
+    if (!rejectedSetting) throw error;
+    state.omitThinking = true;
+    return run();
+  }
+};
+
+/**
+ * Generate and parse a structured JSON response.
  *
- * Picks the provider per call (see "Provider scheduling" above): the
- * preferred one when it has capacity, otherwise the other. Throws an error
- * with statusCode 429 and `retryAfterMs` when no provider can take the call
- * within the wait limit for its priority.
+ * Tries the pool's slots in preference order (see "Model pool" above). Throws
+ * an error with statusCode 429 and `retryAfterMs` when no slot can take the
+ * call within the wait limit for its priority.
  *
  * @param {Object} params
  * @param {"interactive"|"background"} [params.priority] - "interactive" for a
@@ -341,13 +420,14 @@ export async function generateStructured({
   temperature = 0.2,
   priority = "background",
 }) {
-  if (!providerOrder().length) {
+  const pool = slots();
+  if (!pool.length) {
     throw new Error("No AI provider is configured (set GEMINI_API_KEY or GROQ_API_KEY)");
   }
 
   const estimate = estimateTokens(systemPrompt, userPrompt, maxTokens);
-  // Providers that failed for a reason other than rate limiting are not
-  // retried within this call; rate-limited ones may be, after their cooldown.
+  // Slots that failed for a reason other than rate limiting are not retried
+  // within this call; rate-limited ones may be, after their cooldown.
   const failed = new Set();
   const failures = [];
   let rateLimited = false;
@@ -355,34 +435,37 @@ export async function generateStructured({
   let finishReason;
   let answeredBy;
 
-  for (let attempt = 0; attempt < MAX_PROVIDER_ATTEMPTS && !answeredBy; attempt += 1) {
-    const name = await acquireProvider(priority, estimate, failed);
-    if (!name) break;
+  for (let attempt = 0; attempt < pool.length + 2 && !answeredBy; attempt += 1) {
+    const slot = await acquireSlot(priority, estimate, failed);
+    if (!slot) break;
+    const state = stateOf(slot);
 
     try {
-      const result = await PROVIDERS[name].call({
-        systemPrompt,
-        userPrompt,
-        maxTokens,
-        temperature,
-      });
-      updateBuckets(name, result.headers, Date.now());
-      providerState[name].strikes = 0;
+      const result = await callSlot(slot, { systemPrompt, userPrompt, maxTokens, temperature });
+      updateBuckets(slot, result.headers, Date.now());
+      state.strikes = 0;
+      state.usage.ok += 1;
       content = result.content;
       finishReason = result.finishReason;
-      answeredBy = name;
+      answeredBy = slot;
     } catch (error) {
       const now = Date.now();
-      updateBuckets(name, error?.response?.headers, now);
-      failures.push(`${name}=${error.message}`);
+      updateBuckets(slot, error?.response?.headers, now);
+      failures.push(`${slot.key}=${error.message}`);
       if (isRateLimitError(error)) {
         rateLimited = true;
-        markRateLimited(name, error, now);
+        state.usage.rateLimited += 1;
+        markRateLimited(slot, error, now);
       } else {
-        failed.add(name);
+        state.usage.failed += 1;
+        failed.add(slot.key);
+        if (isUnavailableModel(error)) {
+          state.disabledUntil = now + UNAVAILABLE_MODEL_MS;
+          console.warn(`AI model ${slot.key} is not available on this key; skipping it for 6h`);
+        }
       }
     } finally {
-      providerState[name].pendingTokens -= estimate;
+      state.pendingTokens -= estimate;
     }
   }
 
@@ -395,14 +478,14 @@ export async function generateStructured({
 
   if (!content || typeof content !== "string") {
     throw new Error(
-      `AI returned an empty structured response (${answeredBy}, finish reason: ${finishReason || "unknown"})`,
+      `AI returned an empty structured response (${answeredBy.key}, finish reason: ${finishReason || "unknown"})`,
     );
   }
 
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   const parsed = parseJsonLenient(fenced ? fenced[1] : content);
   Object.defineProperty(parsed, "__aiMeta", {
-    value: { provider: answeredBy, modelUsed: PROVIDERS[answeredBy].model() },
+    value: { provider: answeredBy.provider, modelUsed: answeredBy.model },
     enumerable: false,
   });
   return parsed;
