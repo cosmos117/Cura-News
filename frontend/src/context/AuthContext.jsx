@@ -25,7 +25,7 @@ export const AuthProvider = ({ children }) => {
   // True right after sign-up, so every redirect sends the reader to the
   // For You picker (/welcome) rather than the dashboard.
   const [isNewAccount, setIsNewAccount] = useState(false);
-  // One-off message for the next screen, e.g. "your account was restored".
+  // One-off message for the next screen, e.g. "your account was deleted".
   const [notice, setNotice] = useState(null);
 
   const clearSession = useCallback(() => {
@@ -71,12 +71,11 @@ export const AuthProvider = ({ children }) => {
     setNotice(null);
     try {
       const response = await authAPI.login({ email, password });
-      const { token: newToken, user: userData, restored, message } = response.data;
+      const { token: newToken, user: userData } = response.data;
 
       localStorage.setItem(TOKEN_STORAGE_KEY, newToken);
       setToken(newToken);
       setUser(userData);
-      if (restored) setNotice(message);
       return { success: true };
     } catch (err) {
       const errorMsg = getErrorMessage(err, "Login failed");
@@ -93,7 +92,7 @@ export const AuthProvider = ({ children }) => {
     setNotice(null);
     try {
       const response = await authAPI.google(accessToken);
-      const { token: newToken, user: userData, restored, message } = response.data;
+      const { token: newToken, user: userData } = response.data;
       // 201: this Google sign-in just created the account.
       const created = response.status === 201;
 
@@ -101,7 +100,6 @@ export const AuthProvider = ({ children }) => {
       setToken(newToken);
       setUser(userData);
       setIsNewAccount(created);
-      if (restored) setNotice(message);
       return { success: true, created };
     } catch (err) {
       const errorMsg = getErrorMessage(err, "Google sign-in failed");
@@ -168,8 +166,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   /**
-   * Delete the account (it stays restorable by signing in for 30 days), then
-   * sign out. A failure comes back as `error` without signing out.
+   * Permanently delete the account, then sign out. A failure comes back as `error` without signing out.
    */
   const deleteAccount = useCallback(
     async () => {

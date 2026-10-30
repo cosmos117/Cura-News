@@ -1662,6 +1662,24 @@ fieldset legend {
   padding: var(--space-8);
 }
 
+/* Back to the landing page, top-left of the login and sign-up cards. */
+.auth-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transition: color 0.15s ease, gap 0.15s ease;
+}
+
+.auth-back:hover {
+  color: var(--accent);
+  gap: var(--space-2);
+  text-decoration: none;
+}
+
 .auth-card__header {
   text-align: center;
   margin-bottom: var(--space-8);
@@ -1705,13 +1723,6 @@ fieldset legend {
   font-size: var(--text-sm);
   color: var(--text-muted);
   white-space: nowrap;
-}
-
-.auth-footer {
-  margin-top: var(--space-6);
-  text-align: center;
-  font-size: var(--text-sm);
-  color: var(--gray-500);
 }
 
 /* ========================= 13. ARTICLE ========================= */
@@ -2235,6 +2246,8 @@ fieldset legend {
 }
 
 .onb-source {
+  /* Rapid clicks must not select the label text. */
+  user-select: none;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -2257,10 +2270,6 @@ fieldset legend {
   transform: translateY(-4px);
   box-shadow: var(--shadow-lg);
   border-color: var(--blue-500);
-}
-
-.onb-source:active {
-  transform: translateY(-1px) scale(0.98);
 }
 
 .onb-source--selected {
@@ -2355,6 +2364,7 @@ fieldset legend {
 }
 
 .onb-topic {
+  user-select: none;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -2379,10 +2389,6 @@ fieldset legend {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
   border-color: var(--blue-500);
-}
-
-.onb-topic:active {
-  transform: scale(0.97);
 }
 
 /* The icon chip keeps the dashboard per-topic colours (.topic-card--*). */
@@ -2480,8 +2486,7 @@ fieldset legend {
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-4) var(--space-8);
-  background: rgba(255, 253, 244, 0.94);
-  backdrop-filter: blur(6px);
+  background: var(--paper-card);
   border-top: 1px solid var(--border);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
@@ -2855,7 +2860,6 @@ fieldset legend {
   justify-content: center;
   padding: var(--space-4);
   background: rgba(45, 38, 32, 0.45);
-  backdrop-filter: blur(3px);
   animation: modal-fade 0.2s ease both;
 }
 

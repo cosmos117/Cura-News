@@ -16,6 +16,11 @@ const DETAIL_SOURCE_TYPES = ["FULL_TEXT", "SNIPPET_ONLY"];
  * News Schema
  * Represents a news article with AI-generated summaries and metadata
  */
+
+/**
+ * News Schema
+ * Represents a news article with AI-generated summaries and metadata
+ */
 const newsSchema = new mongoose.Schema(
   {
     source: {
@@ -133,8 +138,8 @@ const newsSchema = new mongoose.Schema(
       enum: DETAIL_SOURCE_TYPES,
     },
     /* ---- Content model v2 (see services/content/prompts.js) ---- */
-    // Version of the prompt that produced headline/summary/keyFacts/detailed.
-    // Used by scripts/backfill-content-fields.mjs to stay idempotent.
+    // Version of the prompt that produced headline/summary/keyFacts/detailed;
+    // null means the rule-based fallback wrote the summary.
     promptVersion: {
       type: String,
       trim: true,
@@ -234,7 +239,7 @@ const newsSchema = new mongoose.Schema(
      * category "Tech" and tagged "Science" at the same time, and collapsing
      * the two vocabularies would break the topic tagging.
      *
-     * Defaults to "Other" rather than being required so that pre-existing
+     * Defaults to "Misc" rather than being required so that pre-existing
      * documents and manual POST /news calls without a category still store.
      */
     category: {
@@ -308,7 +313,7 @@ newsSchema.methods.getPublicNews = function () {
   const data = this.toObject();
   return {
     ...data,
-    topicLabel: TOPIC_LABELS[data.topic] || data.category || "Other",
+    topicLabel: TOPIC_LABELS[data.topic] || data.category || "Misc",
   };
 };
 
@@ -363,6 +368,40 @@ newsSchema.query.today = function () {
     ],
   });
 };
+
+/**
+ * Before articles are deleted (the 00:00 IST reset and the stale-day cleanup),
+ * refresh the snapshot held by any live bookmark of them. The snapshot taken
+ * at save time can be missing a detailed summary generated afterwards.
+ *
+ * Bookmark is looked up by name rather than imported, so scripts that never
+ * load the Bookmark model skip this. A failure here must not block cleanup.
+ */
+newsSchema.pre("deleteMany", async function () {
+  const Bookmark = mongoose.models.Bookmark;
+  if (!Bookmark) return;
+
+  try {
+    const bookmarkedIds = await Bookmark.distinct("article", Bookmark.activeFilter());
+    if (!bookmarkedIds.length) return;
+
+    const doomed = await this.model
+      .find({ $and: [this.getFilter(), { _id: { $in: bookmarkedIds } }] })
+      .lean();
+    if (!doomed.length) return;
+
+    await Bookmark.bulkWrite(
+      doomed.map((doc) => ({
+        updateMany: {
+          filter: { article: doc._id },
+          update: { $set: { snapshot: Bookmark.snapshotFrom(doc) } },
+        },
+      })),
+    );
+  } catch (error) {
+    console.error("Failed to refresh bookmark snapshots before delete:", error.message);
+  }
+});
 
 const News = mongoose.model("News", newsSchema);
 

@@ -19,38 +19,6 @@ export const startOfUtcDay = (from = new Date()) => {
   );
 };
 
-/**
- * Exclusive end of the current UTC day.
- *
- * @param {Date} [from] - Reference date (defaults to now)
- * @returns {Date} - UTC midnight at the start of the next day
- */
-export const endOfUtcDay = (from = new Date()) => {
-  const d = new Date(from);
-  return new Date(
-    Date.UTC(
-      d.getUTCFullYear(),
-      d.getUTCMonth(),
-      d.getUTCDate() + 1,
-      0,
-      0,
-      0,
-      0,
-    ),
-  );
-};
-
-/**
- * A MongoDB range filter matching a whole UTC day.
- *
- * @param {Date} [from] - Reference date (defaults to now)
- * @returns {{$gte: Date, $lt: Date}} - Range filter
- */
-export const utcDayRange = (from = new Date()) => ({
-  $gte: startOfUtcDay(from),
-  $lt: endOfUtcDay(from),
-});
-
 const IST_OFFSET_MINUTES = 330;
 
 export const istDayKey = (from = new Date()) => {

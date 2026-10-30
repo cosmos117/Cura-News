@@ -8,6 +8,7 @@ import {
   Loader,
   Eye,
   EyeOff,
+  ArrowLeft,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import GoogleSignInButton from "../components/GoogleSignInButton";
@@ -74,6 +75,10 @@ export default function Signup() {
   return (
     <div className="auth-page">
       <div className="auth-card">
+        <Link to="/" className="auth-back">
+          <ArrowLeft className="icon icon--md" />
+          Back to home
+        </Link>
         <div className="auth-card__header">
           <img src="/logo.svg" alt="" width="56" height="56" className="auth-card__logo" />
           <h1 className="auth-card__title">CURA News</h1>
@@ -235,10 +240,6 @@ export default function Signup() {
         <Link to="/login" className="btn btn-secondary btn-block">
           Sign In
         </Link>
-
-        <p className="auth-footer">
-          By creating an account, you agree to our Terms of Service
-        </p>
       </div>
     </div>
   );

@@ -18,6 +18,35 @@ const getRobotsUrl = (articleUrl) => {
   return `${parsed.origin}/robots.txt`;
 };
 
+const removePageNoise = (document) => {
+  const selectors = [
+    "script",
+    "style",
+    "noscript",
+    "template",
+    "nav",
+    "footer",
+    "aside",
+    "form",
+    "figcaption",
+    "[class*='advert']",
+    "[id*='advert']",
+    "[class*='related']",
+    "[id*='related']",
+    "[class*='popular']",
+    "[id*='popular']",
+    "[class*='caption']",
+    "[class*='credit']",
+    "[class*='social']",
+    "[class*='newsletter']",
+    "[class*='subscription']",
+  ];
+
+  document.querySelectorAll(selectors.join(",")).forEach((element) => {
+    element.remove();
+  });
+};
+
 export async function extractArticleText(articleUrl) {
   try {
     if (!articleUrl || !/^https?:\/\//i.test(articleUrl)) {
@@ -53,8 +82,12 @@ export async function extractArticleText(articleUrl) {
     });
 
     const dom = new JSDOM(response.data, { url: articleUrl });
+    removePageNoise(dom.window.document);
     const parsed = new Readability(dom.window.document).parse();
-    const text = parsed?.textContent?.replace(/\s+/g, " ").trim() || "";
+    const text = parsed?.textContent
+      ?.replace(/\b(?:Getty\s*Images?|Istock|Shutterstock)\s*[/|:-].*?(?=[A-Z][a-z])/gi, "")
+      .replace(/\s+/g, " ")
+      .trim() || "";
     dom.window.close();
 
     if (text.length < config.MIN_TEXT_CHARS) {

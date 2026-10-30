@@ -11,7 +11,7 @@ const ABBREVIATIONS = new Set([
   "etc.",
 ]);
 
-const wordCount = (value) => value.split(/\s+/).filter(Boolean).length;
+export const wordCount = (value) => value.split(/\s+/).filter(Boolean).length;
 
 const normalizeSpacing = (value) => {
   let text = value
@@ -104,13 +104,18 @@ export function formatDetailedText(raw, { minParagraphs = 2, maxParagraphs = 3 }
     return { valid: false, reason: "truncated" };
   }
 
-  const target = sentences.length >= 6 ? maxParagraphs : minParagraphs;
-  const paragraphCount = Math.min(Math.max(target, 1), sentences.length);
+  const target = Math.min(2, Math.max(minParagraphs, 1));
+  const paragraphCount = Math.min(target, sentences.length);
   const paragraphs = regroup(sentences, paragraphCount);
-  if (paragraphs.length < minParagraphs && sentences.length >= minParagraphs) {
+  if (paragraphs.length !== 2) {
     return { valid: false, reason: "paragraph grouping failed" };
   }
-  return { valid: true, text: paragraphs.join("\n\n"), paragraphs };
+  const text = paragraphs.join("\n\n");
+  const words = wordCount(text);
+  if (words < 100 || words > 120) {
+    return { valid: false, reason: "detailed must be 100-120 words" };
+  }
+  return { valid: true, text, paragraphs, wordCount: words };
 }
 
 export default formatDetailedText;

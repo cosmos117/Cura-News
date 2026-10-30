@@ -6,7 +6,7 @@
  *   summary   - 2 sentences, 30-45 words: what happened, in broad terms
  *   keyFacts  - 0-5 atomic facts (4-15 words each): specific numbers, names,
  *               places, dates, causes. Never restates the summary.
- *   detailed  - null OR 80-100 words in 2-3 paragraphs: narrative that adds
+ *   detailed  - null OR 100-120 words in exactly 2 paragraphs: narrative that adds
  *               background, cause and impact. Never reuses summary sentences.
  *
  * Zod (not manual validation) so the rules are declarative and unit-testable.
@@ -25,13 +25,21 @@ import {
 
 export const VALID_TAGS = ["Polity", "Economy", "Defense", "Science", "International"];
 export const VALID_CATEGORIES = [
-  "Politics",
-  "Business",
+  "Politics & Governance",
+  "Opinion & Editorial",
+  "Economy & Business",
+  "Agriculture & Rural",
+  "World Affairs",
+  "Defence & Security",
+  "Law & Judiciary",
+  "Science & Technology",
+  "Environment & Climate",
+  "Health",
+  "Education & Society",
+  "Culture & Lifestyle",
   "Sports",
-  "Tech",
-  "World",
   "Entertainment",
-  "Other",
+  "Misc",
 ];
 
 export const countWords = (value) =>
@@ -88,22 +96,22 @@ const keyFactSchema = z
   );
 
 /**
- * detailed is null when the source text cannot support an 80-100 word
- * narrative. When present it must be 80-100 words in 2-3 paragraphs.
+ * detailed is null when the source text cannot support a 100-120 word
+ * narrative. When present it must be 100-120 words in exactly 2 paragraphs.
  */
 const detailedSchema = z
   .string()
   .trim()
   .refine(
-    (value) => countWords(value) >= 80 && countWords(value) <= 100,
-    "detailed must be 80-100 words",
+    (value) => countWords(value) >= 100 && countWords(value) <= 120,
+    "detailed must be 100-120 words",
   )
   .refine(
     (value) => {
       const paragraphs = countParagraphs(value);
-      return paragraphs >= 2 && paragraphs <= 3;
+      return paragraphs === 2;
     },
-    "detailed must contain 2-3 paragraphs",
+    "detailed must contain exactly 2 paragraphs",
   )
   .nullable();
 
@@ -178,7 +186,6 @@ export function applyTierCaps(content, tier) {
  * The default single-call content schema (FULL tier). `detailed` defaults to
  * null so a model that omits it is accepted rather than rejected.
  */
-export const articleContentSchema = contentSchemaForTier(TIER_FULL);
 
 /** Detailed-only schema, used by the detailed summary service. */
 export const detailedContentSchema = z.object({
@@ -188,4 +195,3 @@ export const detailedContentSchema = z.object({
 
 export { tierForWordCount, TIER_FULL, TIER_PARTIAL, TIER_THIN };
 
-export default articleContentSchema;

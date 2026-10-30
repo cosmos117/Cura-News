@@ -2,7 +2,10 @@
  * Ingestion scheduler.
  *
  * The pipeline is also exposed through the protected admin ingest endpoint.
- * This scheduler keeps ingestion moving continuously through the day.
+ *
+ * Ingestion runs only within the IST window (05:00–23:59 IST). At 00:00 IST
+ * all articles are cleaned up and ingestion pauses until 05:00 IST the next
+ * day. This keeps the database refreshed during active hours and reset daily.
  *
  * This runs the same pipeline on a fixed interval so articles accumulate
  * continuously through the day. It deliberately reuses newsProcessor's existing
@@ -11,19 +14,39 @@
  */
 
 import { config } from "../config/env.js";
+import News from "../models/News.js";
+
+// Indian Standard Time offset: UTC+5:30
+const IST_OFFSET_MS = config.IST_OFFSET_MINUTES * 60 * 1000;
 
 const intervalMs = Math.max(config.INGEST_INTERVAL_MINUTES, 1) * 60 * 1000;
 
 let timer = null;
 let ticker = null;
+let midnightTimer = null;
+let startTimer = null;
 let started = false;
+
+/** Minutes since midnight in IST (0–1439). */
+function getISTMinutes() {
+  const d = new Date(Date.now() + IST_OFFSET_MS);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+
+/** True when the current IST time is inside 05:00–23:59:59 IST. */
+function isIngestionWindow() {
+  const m = getISTMinutes();
+  return m >= 300 && m < 1440;
+}
+
+/** True when the current IST time is exactly 00:00 IST (midnight). */
+function isCleanupTime() {
+  return getISTMinutes() === 0;
+}
 
 /**
  * Run the pipeline once, swallowing errors.
- *
- * A failed run must never take the interval down with it: an unhandled
- * rejection here would crash the whole server, turning a transient feed outage
- * into an outage of the API itself.
+ * A failed run must never take the interval down with it.
  */
 const runOnce = async (trigger) => {
   try {
@@ -44,6 +67,77 @@ const runOnce = async (trigger) => {
   }
 };
 
+/** Delete every article in the database (daily cleanup at 00:00 IST). */
+const runCleanup = async (trigger) => {
+  try {
+    const result = await News.deleteMany({});
+    console.log(`🧹 Scheduled cleanup (${trigger}) deleted ${result.deletedCount} articles`);
+  } catch (error) {
+    console.error(`❌ Scheduled cleanup (${trigger}) failed:`, error.message);
+  }
+};
+
+/** Compute delay (ms) until the next 00:00 IST. */
+function delayUntilMidnight() {
+  const now = new Date();
+  const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+  const nextMidnight = new Date(istNow);
+  nextMidnight.setUTCHours(0, 0, 0, 0);
+  nextMidnight.setUTCDate(nextMidnight.getUTCDate() + 1);
+  const nextMidnightUtc = new Date(nextMidnight.getTime() - IST_OFFSET_MS);
+  return Math.max(nextMidnightUtc.getTime() - now.getTime(), 0);
+}
+
+/** Compute delay (ms) until the next 05:00 IST. */
+function delayUntilFiveAM() {
+  const now = new Date();
+  const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+  const nextStart = new Date(istNow);
+  nextStart.setUTCHours(5, 0, 0, 0);
+  if (nextStart.getTime() <= istNow.getTime()) {
+    nextStart.setUTCDate(nextStart.getUTCDate() + 1);
+  }
+  const nextStartUtc = new Date(nextStart.getTime() - IST_OFFSET_MS);
+  return Math.max(nextStartUtc.getTime() - now.getTime(), 0);
+}
+
+/** Schedule the one-time midnight cleanup + 05:00 IST restart. */
+function scheduleMidnightCycle() {
+  if (midnightTimer) clearTimeout(midnightTimer);
+  midnightTimer = setTimeout(async () => {
+    await runCleanup("midnight");
+    scheduleStartAtFiveAM();
+  }, delayUntilMidnight());
+  midnightTimer.unref?.();
+}
+
+/** Resume the interval scheduler at 05:00 IST. */
+function scheduleStartAtFiveAM() {
+  if (startTimer) clearTimeout(startTimer);
+  startTimer = setTimeout(() => {
+    startIntervalScheduler();
+    scheduleMidnightCycle();
+  }, delayUntilFiveAM());
+  startTimer.unref?.();
+}
+
+/** Start the periodic ingestion loop (only runs inside the IST window). */
+function startIntervalScheduler() {
+  if (timer) clearInterval(timer);
+  timer = setInterval(async () => {
+    if (isCleanupTime()) {
+      await runCleanup("interval-check");
+      scheduleStartAtFiveAM();
+      return;
+    }
+    if (isIngestionWindow()) {
+      await runOnce("interval");
+    }
+    // Outside window (00:01–04:59 IST): skip, wait for 05:00 IST restart.
+  }, intervalMs);
+  timer.unref?.();
+}
+
 /**
  * Start the periodic pipeline.
  *
@@ -62,19 +156,18 @@ export const startScheduler = () => {
 
   started = true;
 
-  // Kick off shortly after boot rather than instantly, so the server is already
-  // listening and a slow Mongo connect cannot delay startup.
-  timer = setInterval(() => runOnce("interval"), intervalMs);
-  // Do not hold the event loop open on our account; the HTTP server does that.
-  timer.unref?.();
+  // Populate immediately if within the window, so a fresh server isn't empty.
+  if (isIngestionWindow()) {
+    ticker = setTimeout(() => runOnce("startup"), 5000);
+    ticker.unref?.();
+  }
 
-  // Populate immediately so a freshly restarted server is not empty for a
-  // whole interval. Delayed slightly to let the DB connection settle.
-  ticker = setTimeout(() => runOnce("startup"), 5000);
-  ticker.unref?.();
+  // Start the interval loop and the midnight cleanup schedule.
+  startIntervalScheduler();
+  scheduleMidnightCycle();
 
   console.log(
-    `⏰ Ingestion scheduler started (every ${config.INGEST_INTERVAL_MINUTES} min)`,
+    `⏰ Ingestion scheduler started (window: 05:00–23:59 IST, interval: ${config.INGEST_INTERVAL_MINUTES} min, cleanup at 00:00 IST)`,
   );
   return true;
 };
@@ -89,8 +182,14 @@ export const stopScheduler = () => {
     clearTimeout(ticker);
     ticker = null;
   }
+  if (midnightTimer) {
+    clearTimeout(midnightTimer);
+    midnightTimer = null;
+  }
+  if (startTimer) {
+    clearTimeout(startTimer);
+    startTimer = null;
+  }
   if (started) console.log("⏹️  Ingestion scheduler stopped");
   started = false;
 };
-
-export const isSchedulerRunning = () => started;

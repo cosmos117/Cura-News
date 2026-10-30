@@ -37,6 +37,16 @@ const prefersReducedMotion = () =>
 const toggle = (list, value) =>
   list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
 
+/**
+ * Toggle on the first click of a burst only. A double or rapid click would
+ * otherwise flip a card on and off again, which looks like the page ignored
+ * the click. event.detail counts consecutive clicks; keyboard presses report 0.
+ */
+const firstClickOnly = (handler) => (event) => {
+  if (event.detail > 1) return;
+  handler();
+};
+
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 export default function Onboarding() {
@@ -61,6 +71,10 @@ export default function Onboarding() {
   const [error, setError] = useState(null);
   const timers = useRef([]);
   const headingRef = useRef(null);
+  // Set while a step is sliding or picks are saving. A ref, not state: rapid
+  // clicks land before a re-render, so state would let them all through and
+  // stack up overlapping transitions and saves (which froze the screen).
+  const busy = useRef(false);
 
   useEffect(() => () => timers.current.forEach((timer) => clearTimeout(timer)), []);
 
@@ -73,24 +87,38 @@ export default function Onboarding() {
     timers.current.push(window.setTimeout(callback, ms));
   };
 
-  const goTo = (nextStep) => {
+  /**
+   * Play the current step's exit, then mount the next one (it animates in).
+   * Expects `busy` to be held; releases it afterwards unless `release` is
+   * false, which is how the finished flow stays locked for good.
+   */
+  const transition = (nextStep, { release = true } = {}) => {
     setError(null);
     setDirection(nextStep > step ? "next" : "back");
     if (prefersReducedMotion()) {
       setStep(nextStep);
+      if (release) busy.current = false;
       return;
     }
-    // Play the current step's exit, then mount the next one (it animates in).
     setLeaving(true);
     later(() => {
       setLeaving(false);
       setStep(nextStep);
+      if (release) busy.current = false;
     }, LEAVE_MS);
+  };
+
+  const goTo = (nextStep) => {
+    if (busy.current) return;
+    busy.current = true;
+    transition(nextStep);
   };
 
   const openFeed = () => navigate("/dashboard", { replace: true });
 
   const finish = async () => {
+    if (busy.current) return;
+    busy.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -100,9 +128,12 @@ export default function Onboarding() {
       });
       updatePreferences(response.data.preferences);
       saveFeedMode("for-you");
-      goTo(STEP_DONE);
+      // Saved: the flow is over, so the lock is never released. A click that
+      // lands on the old step mid-slide can no longer save a second time.
+      transition(STEP_DONE, { release: false });
       later(openFeed, DONE_REDIRECT_MS);
     } catch (err) {
+      busy.current = false;
       setError(getErrorMessage(err, "Your picks could not be saved. Please try again."));
     } finally {
       setSaving(false);
@@ -110,6 +141,8 @@ export default function Onboarding() {
   };
 
   const skip = async () => {
+    if (busy.current) return;
+    busy.current = true;
     if (firstRun) {
       try {
         const response = await meAPI.skipOnboarding();
@@ -164,7 +197,7 @@ export default function Onboarding() {
                         <button
                           type="button"
                           aria-pressed={selected}
-                          onClick={() => setSources((list) => toggle(list, source))}
+                          onClick={firstClickOnly(() => setSources((list) => toggle(list, source)))}
                           className={`onb-source${selected ? " onb-source--selected" : ""}`}
                         >
                           <span className="onb-source__logo">
@@ -234,7 +267,7 @@ export default function Onboarding() {
                         <button
                           type="button"
                           aria-pressed={selected}
-                          onClick={() => setTopics((list) => toggle(list, topic))}
+                          onClick={firstClickOnly(() => setTopics((list) => toggle(list, topic)))}
                           className={`onb-topic topic-card--${colour}${
                             selected ? " onb-topic--selected" : ""
                           }`}
@@ -301,7 +334,7 @@ export default function Onboarding() {
                 type="button"
                 className="btn btn-ghost"
                 onClick={() => goTo(STEP_SOURCES)}
-                disabled={saving}
+                disabled={saving || leaving}
               >
                 <ArrowLeft className="icon icon--md" />
                 Back

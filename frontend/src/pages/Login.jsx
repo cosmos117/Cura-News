@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Mail, Lock, AlertCircle, Loader, Eye, EyeOff } from "lucide-react";
+import { Mail, Lock, AlertCircle, Loader, Eye, EyeOff, ArrowLeft } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import GoogleSignInButton from "../components/GoogleSignInButton";
 
@@ -22,6 +22,10 @@ export default function Login() {
   return (
     <div className="auth-page">
       <div className="auth-card">
+        <Link to="/" className="auth-back">
+          <ArrowLeft className="icon icon--md" />
+          Back to home
+        </Link>
         <div className="auth-card__header">
           <img src="/logo.svg" alt="" width="56" height="56" className="auth-card__logo" />
           <h1 className="auth-card__title">CURA News</h1>
@@ -118,10 +122,6 @@ export default function Login() {
         <Link to="/signup" className="btn btn-secondary btn-block">
           Create Account
         </Link>
-
-        <p className="auth-footer">
-          By signing in, you agree to our Terms of Service
-        </p>
       </div>
     </div>
   );

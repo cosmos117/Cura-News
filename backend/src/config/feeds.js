@@ -15,6 +15,9 @@ export const FEED_SOURCES = [
       { feedId: "the-hindu-entertainment", section: "Entertainment", url: "https://www.thehindu.com/entertainment/feeder/default.rss", defaultCategory: "Entertainment", topicHints: ["entertainment"], priority: 1, enabled: true },
       { feedId: "the-hindu-health", section: "Health", url: "https://www.thehindu.com/sci-tech/health/feeder/default.rss", defaultCategory: "Other", topicHints: ["health"], priority: 1, enabled: true },
       { feedId: "the-hindu-business", section: "Business", url: "https://www.thehindu.com/business/feeder/default.rss", defaultCategory: "Business", topicHints: ["economy-business"], priority: 1, enabled: true },
+      { feedId: "the-hindu-opinion", section: "Opinion", url: "https://www.thehindu.com/opinion/feeder/default.rss", defaultCategory: "Opinion & Editorial", topicHints: ["politics-governance", "economy-business", "world-affairs"], priority: 1, enabled: true },
+      { feedId: "the-hindu-india", section: "India", url: "https://www.thehindu.com/news/india/feeder/default.rss", defaultCategory: "Politics", topicHints: ["politics-governance", "law-judiciary"], priority: 1, enabled: true },
+      { feedId: "the-hindu-science", section: "Science", url: "https://www.thehindu.com/sci-tech/science/feeder/default.rss", defaultCategory: "Tech", topicHints: ["science-technology"], priority: 1, enabled: true },
     ],
   },
   {
@@ -29,6 +32,9 @@ export const FEED_SOURCES = [
       { feedId: "indian-express-technology", section: "Technology", url: "https://indianexpress.com/section/technology/feed/", defaultCategory: "Tech", topicHints: ["science-technology"], priority: 1, enabled: true },
       { feedId: "indian-express-entertainment", section: "Entertainment", url: "https://indianexpress.com/section/entertainment/feed/", defaultCategory: "Entertainment", topicHints: ["entertainment"], priority: 1, enabled: true },
       { feedId: "indian-express-health", section: "Health", url: "https://indianexpress.com/section/lifestyle/health/feed/", defaultCategory: "Other", topicHints: ["health"], priority: 1, enabled: true },
+      { feedId: "indian-express-opinion", section: "Opinion", url: "https://indianexpress.com/section/opinion/feed/", defaultCategory: "Opinion & Editorial", topicHints: ["politics-governance", "economy-business", "world-affairs"], priority: 1, enabled: true },
+      { feedId: "indian-express-cities", section: "Cities", url: "https://indianexpress.com/section/cities/feed/", defaultCategory: "Other", topicHints: ["politics-governance", "health", "education-society"], priority: 1, enabled: true },
+      { feedId: "indian-express-education", section: "Education", url: "https://indianexpress.com/section/education/feed/", defaultCategory: "Other", topicHints: ["education-society"], priority: 1, enabled: true },
     ],
   },
   {
@@ -47,6 +53,9 @@ export const FEED_SOURCES = [
     ],
   },
   ];
+
+/** Publisher names, as stored on News.source and in reader preferences. */
+export const SOURCE_NAMES = FEED_SOURCES.map((source) => source.name);
 
 export const enabledFeeds = () =>
   FEED_SOURCES.flatMap((source) =>

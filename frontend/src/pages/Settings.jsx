@@ -169,9 +169,8 @@ export default function Settings() {
           <section className="settings-card settings-card--danger" aria-labelledby="settings-delete">
             <h3 id="settings-delete" className="settings-card__title">Delete account</h3>
             <p className="settings-card__hint">
-              Your account is deactivated straight away and permanently deleted after 30 days,
-              together with your picks and saved articles. Changed your mind? Sign in again
-              within 30 days and everything is restored.
+              This permanently deletes your account, your For You picks and your saved
+              articles. It cannot be undone.
             </p>
 
             <button type="button" className="btn btn-danger btn-sm" onClick={() => setConfirming(true)}>
@@ -199,8 +198,8 @@ export default function Settings() {
               Delete your account?
             </h2>
             <p id="delete-dialog-text" className="modal__text">
-              Are you sure? Your account will be deactivated right away and permanently
-              deleted after 30 days. Sign in again before then to restore it.
+              Are you sure? Your account, picks and saved articles will be deleted
+              permanently. This cannot be undone.
             </p>
 
             {error && (

@@ -8,306 +8,403 @@ import axios from "axios";
 import { config } from "../config/env.js";
 
 const env = config;
-const AI_RATE_LIMIT_COOLDOWN_MS = 60_000;
-let aiRateLimitedUntil = 0;
-let aiRateLimitStrikes = 0;
-const AI_CIRCUIT_BREAKER_THRESHOLD = 3;
-const AI_CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60_000;
 
-/**
- * System prompt - Instructs the AI to summarize news clearly for general readers
- */
-const SYSTEM_PROMPT = `You are an expert news analyst and summarizer.
+/** Message for every "no AI capacity right now" outcome; callers match on it. */
+export const RATE_LIMITED_MESSAGE = "AI providers are temporarily rate-limited";
 
-Your task is to process news articles from various sources and produce clear, neutral summaries for general readers while:
-1. Covering stories from any section - politics, business, sports, technology, world, entertainment, and more
-2. Creating concise, factual summaries in plain language
-3. Highlighting key facts, figures, people, and context
-4. Identifying key topics and subtopics
+// ---------------------------------------------------------------------------
+// Provider scheduling
+//
+// Every AI call goes through generateStructured, which picks a provider per
+// call rather than always hitting the primary first:
+//
+//  - Each provider has its own cooldown. A 429 from Gemini never blocks Groq,
+//    and the provider's own retry hint is honoured (Gemini's free tier answers
+//    a used-up daily quota with "retry in 18h"; retrying sooner only fails).
+//  - Calls are paced to stay inside the limits, so 429s are rare: a
+//    requests-per-minute window per provider, plus the token-per-minute and
+//    request-per-day budgets Groq reports in its response headers.
+//  - Readers come first. Background work (ingest, the detailed batch) leaves a
+//    reserve of capacity untouched and pauses while a reader is waiting, so a
+//    burst of ingestion cannot make a reader's request fail.
+//
+// State is in memory: a restart clears it and the next calls re-learn limits.
+// ---------------------------------------------------------------------------
 
-IMPORTANT: Return ONLY valid JSON, no other text. Do not include markdown formatting.`;
+const MINUTE_MS = 60_000;
+// Without a retry hint: 30s, doubling per consecutive 429, capped at 5 min.
+const BASE_COOLDOWN_MS = 30_000;
+const MAX_DEFAULT_COOLDOWN_MS = 5 * MINUTE_MS;
+const MAX_COOLDOWN_MS = 24 * 60 * MINUTE_MS;
+// How long a call may wait for capacity before giving up with a 429.
+const INTERACTIVE_MAX_WAIT_MS = 20_000;
+const BACKGROUND_MAX_WAIT_MS = 3 * MINUTE_MS;
+// Per-minute request slots background calls leave free for readers.
+const INTERACTIVE_RPM_RESERVE = 2;
+const MAX_PROVIDER_ATTEMPTS = 4;
 
-const RESPONSE_SCHEMA = `
-Return exactly one JSON object with this shape:
-{
-  "headline": "10-200 character string",
-  "gist": "one factual sentence of no more than 25 words",
-  "summary": "2-3 factual sentences, 50-1000 characters",
-  "keyFacts": ["3-5 short facts that add information not present in headline, gist, or summary"],
-  "tags": ["1-3 values chosen only from Polity, Economy, Defense, Science, International"],
-  "category": "one of Politics, Business, Sports, Tech, World, Entertainment, Other",
-  "subtopics": ["0-5 strings"]
-}
-Do not repeat the headline or summary in keyFacts. Never use labels such as "Source: ...".
-Do not omit required fields, use empty arrays for optional keyFacts and subtopics only, and do not
-return markdown, explanations, or any fields outside this object.`;
+const createProviderState = () => ({
+  cooldownUntil: 0,
+  strikes: 0,
+  recentCalls: [], // dispatch times within the last minute
+  pendingTokens: 0, // estimated tokens of calls still in flight
+  tokens: null, // per-minute token budget, from response headers
+  requests: null, // per-day request budget, from response headers
+});
 
-/**
- * Valid tags for news articles
- */
-const VALID_TAGS = ["Polity", "Economy", "Defense", "Science", "International"];
+let providerState = {
+  gemini: createProviderState(),
+  groq: createProviderState(),
+};
+let readersWaiting = 0;
 
-/**
- * Valid broad categories. The AI is only consulted for `category` after the
- * feed label and keyword rules both come up empty, so this is a fallback and
- * must never invalidate an otherwise good summary.
- */
-const VALID_CATEGORIES = [
-  "Politics",
-  "Business",
-  "Sports",
-  "Tech",
-  "World",
-  "Entertainment",
-  "Other",
-];
+/** Forget every cooldown and learned limit. Used by the test suite. */
+export const resetAiRateState = () => {
+  providerState = { gemini: createProviderState(), groq: createProviderState() };
+  readersWaiting = 0;
+};
 
-const normalizeText = (value) =>
-  String(value || "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+const PROVIDERS = {
+  gemini: {
+    isConfigured: () => Boolean(env.GEMINI_API_KEY),
+    model: () => env.GEMINI_MODEL,
+    rpm: () => env.GEMINI_RPM,
+    async call({ systemPrompt, userPrompt, maxTokens, temperature }) {
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`,
+        {
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+          generationConfig: {
+            temperature,
+            maxOutputTokens: maxTokens,
+            responseMimeType: "application/json",
+            thinkingConfig: { thinkingBudget: 0 },
+          },
+        },
+        { timeout: 30000 },
+      );
+      const candidate = response.data?.candidates?.[0];
+      return {
+        content: candidate?.content?.parts?.[0]?.text,
+        finishReason: candidate?.finishReason,
+        headers: response.headers,
+      };
+    },
+  },
+  groq: {
+    isConfigured: () => Boolean(env.GROQ_API_KEY),
+    model: () => env.GROQ_MODEL,
+    rpm: () => env.GROQ_RPM,
+    async call({ systemPrompt, userPrompt, maxTokens, temperature }) {
+      const response = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model: env.GROQ_MODEL,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature,
+          max_tokens: maxTokens,
+          // gpt-oss models reason before answering, and at the default effort
+          // that reasoning can use the whole max_tokens budget, leaving an
+          // empty answer (finish_reason "length"). Low effort answers these
+          // structured tasks in a few hundred tokens.
+          ...(/gpt-oss/i.test(env.GROQ_MODEL) ? { reasoning_effort: "low" } : {}),
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${env.GROQ_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 30000,
+        },
+      );
+      const choice = response.data?.choices?.[0];
+      return {
+        content: choice?.message?.content,
+        finishReason: choice?.finish_reason,
+        headers: response.headers,
+      };
+    },
+  },
+};
 
-const overlapsByNgram = (left, right) => {
-  const a = normalizeText(left).split(" ").filter(Boolean);
-  const b = normalizeText(right).split(" ").filter(Boolean);
-  if (a.length < 3 || b.length < 3) return false;
-  const grams = new Set();
-  for (let i = 0; i <= b.length - 3; i += 1) grams.add(b.slice(i, i + 3).join(" "));
-  let matches = 0;
-  for (let i = 0; i <= a.length - 3; i += 1) {
-    if (grams.has(a.slice(i, i + 3).join(" "))) matches += 1;
-  }
-  return matches >= 2;
+/** Configured providers, preferred (AI_PROVIDER) first. */
+const providerOrder = () => {
+  const primary = env.AI_PROVIDER.toLowerCase() === "groq" ? "groq" : "gemini";
+  const fallback = primary === "groq" ? "gemini" : "groq";
+  return [primary, fallback].filter((name) => PROVIDERS[name].isConfigured());
 };
 
 /**
- * Validate the AI response
- * @param {object} data - Parsed JSON response
- * @returns {object} Validation result with isValid and errors
+ * Parse a provider duration into milliseconds: "615ms", "7.66s", "18m43.2s",
+ * "65310s", or a bare number of seconds (the Retry-After header).
  */
-function validateResponse(data) {
-  const errors = [];
+const parseDurationMs = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  const text = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(text)) return Math.round(parseFloat(text) * 1000);
+  const unitMs = { ms: 1, s: 1000, m: MINUTE_MS, h: 60 * MINUTE_MS };
+  let total = 0;
+  let matched = false;
+  for (const [, amount, unit] of text.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)) {
+    matched = true;
+    total += parseFloat(amount) * unitMs[unit];
+  }
+  return matched ? Math.round(total) : null;
+};
 
-  if (!data) {
-    return { isValid: false, errors: ["Response is null or undefined"] };
+/**
+ * A rolling budget from Groq's x-ratelimit-* headers: `kind` is "tokens"
+ * (per minute) or "requests" (per day). Both refill continuously, reaching
+ * the limit again after the reported reset time.
+ */
+const readBucket = (headers, kind, now) => {
+  const limit = Number(headers?.[`x-ratelimit-limit-${kind}`]);
+  const remaining = Number(headers?.[`x-ratelimit-remaining-${kind}`]);
+  if (!Number.isFinite(limit) || limit <= 0 || !Number.isFinite(remaining)) {
+    return null;
+  }
+  const resetMs = parseDurationMs(headers[`x-ratelimit-reset-${kind}`]) ?? 0;
+  return { limit, remaining, measuredAt: now, fullAt: now + resetMs };
+};
+
+const bucketLevel = (bucket, now) => {
+  if (now >= bucket.fullAt) return bucket.limit;
+  const progress = (now - bucket.measuredAt) / (bucket.fullAt - bucket.measuredAt);
+  return bucket.remaining + (bucket.limit - bucket.remaining) * progress;
+};
+
+/** Milliseconds until `bucket` holds `needed` units; 0 when unknown or enough. */
+const bucketWaitMs = (bucket, needed, now) => {
+  if (!bucket) return 0;
+  const target = Math.min(needed, bucket.limit);
+  const level = bucketLevel(bucket, now);
+  if (level >= target) return 0;
+  const refillPerMs =
+    (bucket.limit - bucket.remaining) / (bucket.fullAt - bucket.measuredAt);
+  return Math.ceil((target - level) / refillPerMs);
+};
+
+const updateBuckets = (name, headers, now) => {
+  const state = providerState[name];
+  state.tokens = readBucket(headers, "tokens", now) ?? state.tokens;
+  state.requests = readBucket(headers, "requests", now) ?? state.requests;
+};
+
+/** Rough size of a call as providers count it: prompt (~4 chars/token) plus the output allowance. */
+const estimateTokens = (systemPrompt, userPrompt, maxTokens) =>
+  Math.ceil((String(systemPrompt).length + String(userPrompt).length) / 4) + maxTokens;
+
+/** Milliseconds until `name` can take a call of this priority and size (0 = now). */
+const providerWaitMs = (name, priority, estimate, now) => {
+  const state = providerState[name];
+  const reader = priority === "interactive";
+  let wait = Math.max(0, state.cooldownUntil - now);
+
+  state.recentCalls = state.recentCalls.filter((at) => now - at < MINUTE_MS);
+  const rpm = Math.max(1, Number(PROVIDERS[name].rpm()) || 1);
+  const rpmLimit = reader ? rpm : Math.max(1, rpm - INTERACTIVE_RPM_RESERVE);
+  if (state.recentCalls.length >= rpmLimit) {
+    const freesSlot = state.recentCalls[state.recentCalls.length - rpmLimit];
+    wait = Math.max(wait, freesSlot + MINUTE_MS - now);
   }
 
-  // Check for error response
-  if (data.error) {
-    return { isValid: false, errors: [data.error] };
-  }
+  const tokenReserve = reader ? 0 : env.AI_INTERACTIVE_TOKEN_RESERVE;
+  wait = Math.max(
+    wait,
+    bucketWaitMs(state.tokens, estimate + state.pendingTokens + tokenReserve, now),
+  );
+  const requestReserve = reader ? 0 : env.AI_INTERACTIVE_REQUEST_RESERVE;
+  wait = Math.max(wait, bucketWaitMs(state.requests, 1 + requestReserve, now));
+  return wait;
+};
 
-  // Validate headline
-  if (
-    !data.headline ||
-    typeof data.headline !== "string" ||
-    data.headline.length < 10 ||
-    data.headline.length > 200
-  ) {
-    errors.push("Headline must be 10-200 characters");
-  }
+const rateLimitedError = (retryAfterMs, detail) => {
+  const error = new Error(detail ? `${RATE_LIMITED_MESSAGE}: ${detail}` : RATE_LIMITED_MESSAGE);
+  error.statusCode = 429;
+  error.retryAfterMs = Number.isFinite(retryAfterMs) ? Math.ceil(retryAfterMs) : null;
+  return error;
+};
 
-  if (
-    !data.gist ||
-    typeof data.gist !== "string" ||
-    data.gist.trim().split(/\s+/).length > 25
-  ) {
-    errors.push("Gist must be one sentence of no more than 25 words");
-  }
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  // Validate summary
-  if (
-    !data.summary ||
-    typeof data.summary !== "string" ||
-    data.summary.length < 50 ||
-    data.summary.length > 1000
-  ) {
-    errors.push("Summary must be 50-1000 characters");
-  }
+/**
+ * Whether a call of this priority could start within its wait limit, without
+ * making one. Lets callers skip expensive prep (fetching the article page)
+ * when the answer would be a 429 anyway.
+ *
+ * @param {"interactive"|"background"} [priority]
+ * @returns {{ available: boolean, retryAfterMs: number|null }}
+ */
+export const getAiAvailability = (priority = "interactive") => {
+  const order = providerOrder();
+  if (!order.length) return { available: false, retryAfterMs: null };
+  const now = Date.now();
+  const soonest = Math.min(...order.map((name) => providerWaitMs(name, priority, 0, now)));
+  const maxWait = priority === "interactive" ? INTERACTIVE_MAX_WAIT_MS : BACKGROUND_MAX_WAIT_MS;
+  return { available: soonest <= maxWait, retryAfterMs: soonest };
+};
 
-  if (data.keyFacts !== undefined) {
-    if (!Array.isArray(data.keyFacts) || data.keyFacts.length > 5) {
-      errors.push("Key facts must contain 0-5 items");
-    } else if (data.keyFacts.some((fact) => typeof fact !== "string" || !fact.trim())) {
-      errors.push("Key facts must be non-empty strings");
-    } else {
-      const facts = data.keyFacts.filter(
-        (fact) =>
-          !/^source\s*:/i.test(fact.trim()) &&
-          !normalizeText(data.headline).includes(normalizeText(fact)) &&
-          !normalizeText(data.summary).includes(normalizeText(fact)) &&
-          !overlapsByNgram(fact, data.summary),
-      );
-      data.keyFacts = facts;
-    }
-  } else {
-    data.keyFacts = Array.isArray(data.bulletPoints)
-      ? data.bulletPoints.slice(0, 5)
-      : [];
-  }
+/**
+ * Wait for a provider with capacity and reserve it. Throws a 429 straight away
+ * when the wait would exceed the priority's limit, rather than sleeping first.
+ */
+const acquireProvider = async (priority, estimate, excluded) => {
+  const reader = priority === "interactive";
+  const deadline = Date.now() + (reader ? INTERACTIVE_MAX_WAIT_MS : BACKGROUND_MAX_WAIT_MS);
+  if (reader) readersWaiting += 1;
+  try {
+    for (;;) {
+      const candidates = providerOrder().filter((name) => !excluded.has(name));
+      if (!candidates.length) return null;
 
-  // Validate tags
-  if (
-    !Array.isArray(data.tags) ||
-    data.tags.length < 1 ||
-    data.tags.length > 3
-  ) {
-    errors.push("Must have 1-3 tags");
-  } else {
-    data.tags.forEach((tag) => {
-      if (!VALID_TAGS.includes(tag)) {
-        errors.push(
-          `Invalid tag: ${tag}. Valid tags: ${VALID_TAGS.join(", ")}`,
-        );
+      const now = Date.now();
+      const waits = candidates.map((name) => providerWaitMs(name, priority, estimate, now));
+      // Background work steps aside while any reader is queued.
+      const mustYield = !reader && readersWaiting > 0;
+      const ready = mustYield ? -1 : waits.indexOf(0);
+      if (ready !== -1) {
+        const name = candidates[ready];
+        providerState[name].recentCalls.push(now);
+        providerState[name].pendingTokens += estimate;
+        return name;
       }
-    });
-  }
 
-  // Validate category (optional, single value). A bad or missing category is
-  // coerced rather than rejected: the caller only uses the AI's category as a
-  // last-resort fallback, and discarding an otherwise valid summary over it
-  // would waste the whole call.
-  if (data.category !== undefined) {
-    if (
-      typeof data.category !== "string" ||
-      !VALID_CATEGORIES.includes(data.category)
-    ) {
-      data.category = "Other";
+      const soonest = Math.min(...waits);
+      if (now + soonest > deadline) {
+        throw rateLimitedError(soonest);
+      }
+      // Re-check at least every second: calls finishing or a reader arriving
+      // can change the answer before the computed wait is over.
+      await sleep(Math.min(Math.max(soonest, 250), 1000));
     }
-  } else {
-    data.category = "Other";
+  } finally {
+    if (reader) readersWaiting -= 1;
   }
+};
 
-  // Validate subtopics (optional, 0-5)
-  if (data.subtopics) {
-    if (!Array.isArray(data.subtopics) || data.subtopics.length > 5) {
-      errors.push("Subtopics must be 0-5 items");
-    }
-  } else {
-    data.subtopics = [];
-  }
+const isRateLimitError = (error) =>
+  error?.response?.status === 429 || error?.status === 429;
 
-  return {
-    isValid: errors.length === 0,
-    errors,
-  };
-}
+/** Retry hint of a 429: Retry-After header, Gemini RetryInfo, or "retry in 7.5s" text. */
+const retryHintMs = (error) => {
+  const fromHeader = parseDurationMs(error?.response?.headers?.["retry-after"]);
+  if (fromHeader) return fromHeader;
+  const body = error?.response?.data?.error;
+  const retryInfo = Array.isArray(body?.details)
+    ? body.details.find((detail) => String(detail?.["@type"]).endsWith("RetryInfo"))
+    : null;
+  const fromRetryInfo = parseDurationMs(retryInfo?.retryDelay);
+  if (fromRetryInfo) return fromRetryInfo;
+  const message = typeof body === "string" ? body : body?.message || "";
+  const match = String(message).match(/(?:retry|try again) in ([\d.hms]+)/i);
+  return match ? parseDurationMs(match[1]) : null;
+};
+
+const markRateLimited = (name, error, now) => {
+  const state = providerState[name];
+  state.strikes += 1;
+  const hinted = retryHintMs(error);
+  const cooldownMs = Math.min(
+    Math.max(
+      hinted ?? Math.min(BASE_COOLDOWN_MS * 2 ** (state.strikes - 1), MAX_DEFAULT_COOLDOWN_MS),
+      1000,
+    ),
+    MAX_COOLDOWN_MS,
+  );
+  state.cooldownUntil = Math.max(state.cooldownUntil, now + cooldownMs);
+  console.warn(
+    `AI provider ${name} rate-limited; pausing it for ${Math.round(cooldownMs / 1000)}s`,
+  );
+};
 
 /**
  * Generate and parse a structured JSON response using the shared AI client.
+ *
+ * Picks the provider per call (see "Provider scheduling" above): the
+ * preferred one when it has capacity, otherwise the other. Throws an error
+ * with statusCode 429 and `retryAfterMs` when no provider can take the call
+ * within the wait limit for its priority.
+ *
+ * @param {Object} params
+ * @param {"interactive"|"background"} [params.priority] - "interactive" for a
+ *   reader waiting on the answer; "background" (default) for ingest and batch
+ *   work, which leaves capacity free for readers and waits longer.
  */
 export async function generateStructured({
   systemPrompt,
   userPrompt,
   maxTokens = 1800,
   temperature = 0.2,
+  priority = "background",
 }) {
-  if (Date.now() < aiRateLimitedUntil) {
-    const error = new Error(
-      "AI providers are temporarily rate-limited",
-    );
-    error.statusCode = 429;
-    throw error;
+  if (!providerOrder().length) {
+    throw new Error("No AI provider is configured (set GEMINI_API_KEY or GROQ_API_KEY)");
   }
 
-  const isRateLimitError = (error) =>
-    error?.response?.status === 429 || error?.status === 429;
-
-  const markRateLimited = () => {
-    aiRateLimitStrikes += 1;
-    aiRateLimitedUntil =
-      Date.now() +
-      (aiRateLimitStrikes >= AI_CIRCUIT_BREAKER_THRESHOLD
-        ? AI_CIRCUIT_BREAKER_COOLDOWN_MS
-        : AI_RATE_LIMIT_COOLDOWN_MS);
-  };
-
-  const callGroq = async () => {
-    if (!env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is not configured");
-    const response = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: env.GROQ_MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature,
-        max_tokens: maxTokens,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${env.GROQ_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        timeout: 30000,
-      },
-    );
-    return response.data?.choices?.[0]?.message?.content;
-  };
-
-  const callGemini = async () => {
-    if (!env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`,
-      {
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        generationConfig: {
-          temperature,
-          maxOutputTokens: maxTokens,
-          responseMimeType: "application/json",
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      },
-      { timeout: 30000 },
-    );
-    return response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  };
-
+  const estimate = estimateTokens(systemPrompt, userPrompt, maxTokens);
+  // Providers that failed for a reason other than rate limiting are not
+  // retried within this call; rate-limited ones may be, after their cooldown.
+  const failed = new Set();
+  const failures = [];
+  let rateLimited = false;
   let content;
-  const primary = env.AI_PROVIDER.toLowerCase() === "groq" ? callGroq : callGemini;
-  const fallback = env.AI_PROVIDER.toLowerCase() === "groq" ? callGemini : callGroq;
-  try {
-    content = await primary();
-  } catch (primaryError) {
-    if (isRateLimitError(primaryError)) markRateLimited();
+  let finishReason;
+  let answeredBy;
+
+  for (let attempt = 0; attempt < MAX_PROVIDER_ATTEMPTS && !answeredBy; attempt += 1) {
+    const name = await acquireProvider(priority, estimate, failed);
+    if (!name) break;
+
     try {
-      content = await fallback();
-    } catch (fallbackError) {
-      if (isRateLimitError(fallbackError)) markRateLimited();
-      const error = new Error(
-        `AI providers failed: primary=${primaryError.message}; fallback=${fallbackError.message}`,
-      );
-      if (
-        isRateLimitError(primaryError) ||
-        isRateLimitError(fallbackError)
-      ) {
-        error.statusCode = 429;
+      const result = await PROVIDERS[name].call({
+        systemPrompt,
+        userPrompt,
+        maxTokens,
+        temperature,
+      });
+      updateBuckets(name, result.headers, Date.now());
+      providerState[name].strikes = 0;
+      content = result.content;
+      finishReason = result.finishReason;
+      answeredBy = name;
+    } catch (error) {
+      const now = Date.now();
+      updateBuckets(name, error?.response?.headers, now);
+      failures.push(`${name}=${error.message}`);
+      if (isRateLimitError(error)) {
+        rateLimited = true;
+        markRateLimited(name, error, now);
+      } else {
+        failed.add(name);
       }
-      throw error;
+    } finally {
+      providerState[name].pendingTokens -= estimate;
     }
   }
 
+  if (!answeredBy) {
+    if (rateLimited) {
+      throw rateLimitedError(getAiAvailability(priority).retryAfterMs, failures.join("; "));
+    }
+    throw new Error(`AI providers failed: ${failures.join("; ")}`);
+  }
+
   if (!content || typeof content !== "string") {
-    throw new Error("AI returned an empty structured response");
+    throw new Error(
+      `AI returned an empty structured response (${answeredBy}, finish reason: ${finishReason || "unknown"})`,
+    );
   }
 
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   const parsed = parseJsonLenient(fenced ? fenced[1] : content);
   Object.defineProperty(parsed, "__aiMeta", {
-    value: {
-      provider: env.AI_PROVIDER.toLowerCase() === "groq" ? "groq" : "gemini",
-      modelUsed:
-        env.AI_PROVIDER.toLowerCase() === "groq"
-          ? env.GROQ_MODEL
-          : env.GEMINI_MODEL,
-    },
+    value: { provider: answeredBy, modelUsed: PROVIDERS[answeredBy].model() },
     enumerable: false,
   });
-  aiRateLimitStrikes = 0;
   return parsed;
 }
 
@@ -359,181 +456,3 @@ function parseJsonLenient(text) {
     return JSON.parse(out);
   }
 }
-
-/**
- * Structured summarization via the configured provider chain.
- *
- * The name is historical. It delegates to generateStructured, which uses the
- * configured provider and fallback chain.
- *
- * @param {string} userMessage - User's article text
- * @returns {Promise<object>} Parsed JSON response
- */
-async function callConfiguredAI(userMessage) {
-  return generateStructured({
-    systemPrompt: SYSTEM_PROMPT,
-    userPrompt: `Please analyze this news article and return the CURA JSON schema.
-${RESPONSE_SCHEMA}
-
-${userMessage}`,
-    maxTokens: 1500,
-    temperature: 0.2,
-  });
-}
-
-/**
- * Main summarization function
- * Converts raw article text to structured news summary content
- * @param {string} articleText - Raw article text to summarize
- * @returns {Promise<object>} Structured article data with validation
- */
-export async function summarizeArticle(articleText) {
-  // Input validation
-  if (!articleText || typeof articleText !== "string") {
-    throw new Error("Article text must be a non-empty string");
-  }
-
-  if (articleText.length < 100) {
-    throw new Error("Article must be at least 100 characters long");
-  }
-
-  if (articleText.length > 10000) {
-    throw new Error("Article must be less than 10,000 characters");
-  }
-
-  try {
-    const result = await callConfiguredAI(articleText);
-
-    // Validate response
-    const validation = validateResponse(result);
-
-    if (!validation.isValid) {
-      throw new Error(
-        `AI response validation failed: ${validation.errors.join(", ")}`,
-      );
-    }
-
-    // Ensure all required fields exist.
-    // NOTE: deliberately no `source` key here. `source` is the publisher in
-    // the News schema (enum-constrained) and this is the publisher-less AI
-    // output; emitting "ai-generated" overwrote the real source downstream and
-    // failed News validation for every article.
-    return {
-      headline: result.headline,
-      gist: result.gist,
-      summary: result.summary,
-      bulletPoints: result.keyFacts || [],
-      keyFacts: result.keyFacts || [],
-      tags: result.tags,
-      category: result.category,
-      subtopics: result.subtopics || [],
-      processedAt: new Date(),
-    };
-  } catch (error) {
-    // Enhanced error handling. These must be real Error instances: throwing
-    // plain objects left `.name` and `.stack` undefined, which defeated every
-    // error-name branch in the global error handler.
-    if (error.statusCode && error.statusCode !== 500) {
-      throw error;
-    }
-
-    if (error.statusCode === 401) {
-      throw error;
-    }
-
-    const wrapped = new Error(error.message || "Failed to summarize article");
-    wrapped.statusCode = 500;
-    throw wrapped;
-  }
-}
-
-/**
- * Batch summarization for multiple articles
- * @param {string[]} articles - Array of article texts
- * @returns {Promise<object[]>} Array of summarized articles
- */
-export async function summarizeArticles(articles) {
-  if (!Array.isArray(articles) || articles.length === 0) {
-    throw new Error("Articles must be a non-empty array");
-  }
-
-  if (articles.length > 10) {
-    throw new Error("Maximum 10 articles per batch");
-  }
-
-  const results = [];
-  const errors = [];
-
-  for (let i = 0; i < articles.length; i++) {
-    try {
-      const result = await summarizeArticle(articles[i]);
-      results.push({
-        index: i,
-        success: true,
-        data: result,
-      });
-    } catch (error) {
-      errors.push({
-        index: i,
-        success: false,
-        error: error.message || "Unknown error",
-      });
-    }
-
-    // Rate limiting - wait 500ms between API calls
-    if (i < articles.length - 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-
-  return {
-    total: articles.length,
-    successful: results.length,
-    failed: errors.length,
-    results,
-    errors,
-  };
-}
-
-/**
- * Extract key information from article preview
- * Use this for quick validation before full processing
- * @param {string} articlePreview - First 200-300 chars of article
- * @returns {Promise<object>} Quick analysis result
- */
-export async function quickAnalyze(articlePreview) {
-  if (!articlePreview || articlePreview.length < 50) {
-    throw new Error("Article preview must be at least 50 characters");
-  }
-
-  const systemPrompt = `You are an expert at quickly describing a news article for a general news digest.
-
-Respond with JSON:
-{
-  "primaryTopic": "Polity|Economy|Defense|Science|International|Other",
-  "confidence": 0-100,
-  "reason": "Brief reason"
-}
-
-Do NOT include markdown formatting.`;
-
-  // Routed through generateStructured so this honours AI_PROVIDER and the
-  // Gemini -> Groq fallback like every other AI call.
-  try {
-    return await generateStructured({
-      systemPrompt,
-      userPrompt: `Quick analyze: ${articlePreview}`,
-      maxTokens: 200,
-      temperature: 0.5,
-    });
-  } catch (error) {
-    throw new Error(`Quick analysis failed: ${error.message}`);
-  }
-}
-
-export default {
-  summarizeArticle,
-  summarizeArticles,
-  quickAnalyze,
-  generateStructured,
-};

@@ -6,26 +6,19 @@
  *   1. RSS/feed category  - the publisher's own label. Authoritative and free.
  *   2. Keyword rules      - deterministic, no network call, good coverage.
  *   3. AI suggestion      - only when 1 and 2 both come up empty.
- *   4. "Other"            - so every article is always categorised.
+ *   4. "Misc"             - so every article is always categorised.
  *
  * The AI step is a genuine fallback rather than the primary path: calling
  * An AI provider for every article costs money and is slower, and the feed label plus
  * keyword rules already resolve the large majority of articles.
  */
+import { TOPICS } from "../config/topics.js";
 
-export const NEWS_CATEGORIES = [
-  "Politics",
-  "Business",
-  "Sports",
-  "Tech",
-  "World",
-  "Entertainment",
-  "Other",
-];
+export const NEWS_CATEGORIES = TOPICS.map((topic) => topic.label);
 
 const VALID_CATEGORIES = new Set(NEWS_CATEGORIES);
 
-export const DEFAULT_CATEGORY = "Other";
+export const DEFAULT_CATEGORY = "Misc";
 
 /**
  * RSS feeds use their own category vocabulary. Mapping is
@@ -34,28 +27,28 @@ export const DEFAULT_CATEGORY = "Other";
  */
 const FEED_CATEGORY_MAP = {
   // Common publisher feed values
-  business: "Business",
+  business: "Economy & Business",
   entertainment: "Entertainment",
   sports: "Sports",
   sport: "Sports",
-  technology: "Tech",
-  tech: "Tech",
-  world: "World",
+  technology: "Science & Technology",
+  tech: "Science & Technology",
+  world: "World Affairs",
   general: null, // too broad to be useful; let keywords decide
   health: null, // no Health category in the enum
   science: null, // no Science category in the enum
-  politics: "Politics",
+  politics: "Politics & Governance",
   // Common RSS <category> labels
-  nation: "Politics",
+  nation: "Politics & Governance",
   national: "Politics",
   "top stories": null,
   "breaking news": null,
-  international: "World",
-  global: "World",
-  markets: "Business",
-  economy: "Business",
-  finance: "Business",
-  industry: "Business",
+  international: "World Affairs",
+  global: "World Affairs",
+  markets: "Economy & Business",
+  economy: "Economy & Business",
+  finance: "Economy & Business",
+  industry: "Economy & Business",
   cricket: "Sports",
   football: "Sports",
   tennis: "Sports",
@@ -66,13 +59,13 @@ const FEED_CATEGORY_MAP = {
   celebrity: "Entertainment",
   tv: "Entertainment",
   bollywood: "Entertainment",
-  software: "Tech",
-  gadgets: "Tech",
-  internet: "Tech",
-  ai: "Tech",
-  cybersecurity: "Tech",
-  startup: "Tech",
-  "e-commerce": "Business",
+  software: "Science & Technology",
+  gadgets: "Science & Technology",
+  internet: "Science & Technology",
+  ai: "Science & Technology",
+  cybersecurity: "Science & Technology",
+  startup: "Economy & Business",
+  "e-commerce": "Economy & Business",
 };
 
 /**
@@ -211,14 +204,19 @@ export const categoryFromFeed = (feedCategory) => {
  */
 export const categoryFromKeywords = (text) => {
   if (typeof text !== "string" || !text.trim()) return null;
-
-  for (const [category, terms] of COMPILED_RULES) {
-    if (terms.some(({ pattern }) => pattern.test(text))) {
-      return category;
-    }
-  }
-
-  return null;
+  const normalized = text.toLowerCase();
+  const scored = TOPICS
+    .filter((topic) => topic.id !== "misc")
+    .map((topic) => ({
+      topic,
+      score: topic.includeKeywords.reduce(
+        (score, keyword) =>
+          score + (new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(normalized) ? 1 : 0),
+        0,
+      ),
+    }))
+    .sort((left, right) => right.score - left.score);
+  return scored[0]?.score > 0 ? scored[0].topic.label : null;
 };
 
 /**
@@ -226,7 +224,20 @@ export const categoryFromKeywords = (text) => {
  * @param {string} aiCategory
  * @returns {string|null}
  */
-export const categoryFromAi = (aiCategory) => asCategory(aiCategory);
+export const categoryFromAi = (aiCategory) => {
+  const direct = asCategory(aiCategory);
+  if (direct) return direct;
+  const legacy = {
+    Politics: "Politics & Governance",
+    Business: "Economy & Business",
+    Sports: "Sports",
+    Tech: "Science & Technology",
+    World: "World Affairs",
+    Entertainment: "Entertainment",
+    Other: "Misc",
+  };
+  return legacy[aiCategory] || null;
+};
 
 /**
  * Full resolution chain: feed category, then keywords, then AI, then default.
@@ -249,10 +260,3 @@ export const resolveCategory = ({ feedCategory, text, aiCategory } = {}) => {
 
   return { category: DEFAULT_CATEGORY, derivedBy: "default" };
 };
-
-/**
- * Validate a client-supplied category.
- * @param {string} value
- * @returns {boolean}
- */
-export const isValidCategory = (value) => asCategory(value) !== null;

@@ -1,6 +1,10 @@
 import News from "../models/News.js";
 import { config } from "../config/env.js";
-import { generateStructured } from "./aiService.js";
+import {
+  generateStructured,
+  getAiAvailability,
+  RATE_LIMITED_MESSAGE,
+} from "./aiService.js";
 import { extractArticleText } from "./articleTextExtractor.js";
 import { PROMPT_VERSION } from "./content/prompts.js";
 import {
@@ -9,6 +13,7 @@ import {
 } from "./content/schema.js";
 import { tierForWordCount, TIER_FULL } from "./content/tiers.js";
 import { formatDetailedText } from "../utils/formatDetailedText.js";
+import { startOfUtcDay } from "../utils/date.js";
 
 const SYSTEM_PROMPT = `You are a careful news explainer for a general news aggregator read by a broad audience.
 Rules:
@@ -17,35 +22,12 @@ Rules:
 3. Stay neutral and factual. No opinions or loaded language.
 4. Keep names, numbers, dates and places exactly as given.
 5. The detailed narrative has a different job than the short summary and key facts provided below: it explains why it happened, background and context, who is affected, and what happens next - ONLY where the source states it. It must not begin with, or re-use sentences from, the summary.
-6. If the extracted article is too thin for an 80-100 word narrative, set "detailed" to null. Never pad or repeat.
-7. Output ONLY valid JSON matching the requested schema.`;
+6. Summarize the complete article, not just its opening paragraph or a webpage fragment.
+7. Do not include image credits, captions, advertisements, navigation, related links, or section headings.
+8. If the extracted article is too thin for a 100-120 word narrative, set "detailed" to null. Never pad or repeat.
+9. Output ONLY valid JSON matching the requested schema.`;
 
 const countWords = (value) => value.trim().split(/\s+/).filter(Boolean).length;
-
-const buildSourceFallback = (article, text, sourceType) => {
-  const words = text.trim().split(/\s+/).slice(0, 100);
-  const midpoint = Math.ceil(words.length / 2);
-  const detailed = [
-    words.slice(0, midpoint).join(" "),
-    words.slice(midpoint).join(" "),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  return {
-    status: "DONE",
-    detailSourceType: sourceType,
-    promptVersion: `${PROMPT_VERSION}-source-fallback`,
-    sourceWordCount: text.trim().split(/\s+/).length,
-    sourceTier: tierForWordCount(text.trim().split(/\s+/).length),
-    modelUsed: "deterministic-source-fallback",
-    detailed: formatDetailedText(detailed).text || detailed,
-    tags: article.tags || [],
-    category: article.category || "Other",
-    confidence: "low",
-    fallbackReason: "AI providers are temporarily rate-limited",
-  };
-};
 
 const normalizeOutput = (output, fallbackTags = []) => {
   if (!output || typeof output !== "object") {
@@ -66,13 +48,21 @@ const normalizeOutput = (output, fallbackTags = []) => {
     ...output,
     tags: tags.length ? tags : fallbackTags,
     category: [
-      "Politics",
-      "Business",
+      "Politics & Governance",
+      "Opinion & Editorial",
+      "Economy & Business",
+      "Agriculture & Rural",
+      "World Affairs",
+      "Defence & Security",
+      "Law & Judiciary",
+      "Science & Technology",
+      "Environment & Climate",
+      "Health",
+      "Education & Society",
+      "Culture & Lifestyle",
       "Sports",
-      "Tech",
-      "World",
       "Entertainment",
-      "Other",
+      "Misc",
     ].includes(output.category)
       ? output.category
       : "Other",
@@ -106,9 +96,9 @@ Key facts: ${keyFacts?.length ? keyFacts.join(" | ") : "(none)"}
 
 Return JSON:
 {
-  "detailed": "80-100 words in 2-3 short paragraphs (separate paragraphs with a blank line), or null if the text is too thin",
+  "detailed": "100-120 words in exactly 2 short paragraphs (separate paragraphs with a blank line), or null if the text is too thin",
   "tags": ["Polity", "Economy", "Defense", "Science", "International"],
-  "category": "Politics|Business|Sports|Tech|World|Entertainment|Other",
+  "category": "Politics & Governance|Opinion & Editorial|Economy & Business|Agriculture & Rural|World Affairs|Defence & Security|Law & Judiciary|Science & Technology|Environment & Climate|Health|Education & Society|Culture & Lifestyle|Sports|Entertainment|Misc",
   "confidence": "high|medium|low"
 }`;
 
@@ -132,15 +122,35 @@ const hasHighSourceOverlap = (summary, sourceText) => {
   return matches >= 3 && matches / summaryNgramCount >= 0.15;
 };
 
-const todayStart = () => {
-  const start = new Date();
-  start.setUTCHours(0, 0, 0, 0);
-  return start;
-};
+const todayStart = () => startOfUtcDay();
 
 const isRateLimitedError = (error) => error?.statusCode === 429;
 
-export async function generateDetailedSummary(article) {
+/**
+ * No AI capacity right now. Distinct from FAILED: nothing is wrong with the
+ * article, so callers must leave it retryable rather than record a failure.
+ */
+const rateLimitedResult = (retryAfterMs, detailSourceType = null) => ({
+  status: "RATE_LIMITED",
+  detailSourceType,
+  reason: RATE_LIMITED_MESSAGE,
+  retryAfterMs: Number.isFinite(retryAfterMs) ? retryAfterMs : null,
+});
+
+/**
+ * @param {Object} article - News document
+ * @param {Object} [options]
+ * @param {"interactive"|"background"} [options.priority] - "interactive" when a
+ *   reader is waiting on the result (see aiService's provider scheduling)
+ */
+export async function generateDetailedSummary(article, { priority = "background" } = {}) {
+  // Fetching the article page is wasted work if the AI call after it would
+  // be rate-limited anyway, so check capacity first.
+  const availability = getAiAvailability(priority);
+  if (!availability.available) {
+    return rateLimitedResult(availability.retryAfterMs);
+  }
+
   const extracted = await extractArticleText(article.url);
   if (!extracted.available) {
     return {
@@ -171,29 +181,25 @@ export async function generateDetailedSummary(article) {
     summary: article.summary,
     keyFacts: article.keyFacts?.length ? article.keyFacts : article.bulletPoints,
   };
+  const generate = (userPrompt) =>
+    generateStructured({ systemPrompt: SYSTEM_PROMPT, userPrompt, priority });
   let output;
   let modelUsed = null;
   try {
-    const rawOutput = await generateStructured({
-      systemPrompt: SYSTEM_PROMPT,
-      userPrompt: buildPrompt(input),
-    });
+    const rawOutput = await generate(buildPrompt(input));
     output = normalizeOutput(rawOutput, article.tags);
     modelUsed = rawOutput.__aiMeta?.modelUsed || null;
   } catch (firstError) {
     if (isRateLimitedError(firstError)) {
-      return buildSourceFallback(article, extracted.text, extracted.sourceType);
+      return rateLimitedResult(firstError.retryAfterMs, extracted.sourceType);
     }
     try {
-      const rawRepairOutput = await generateStructured({
-        systemPrompt: SYSTEM_PROMPT,
-        userPrompt: buildRepairPrompt(input, firstError.message),
-      });
+      const rawRepairOutput = await generate(buildRepairPrompt(input, firstError.message));
       output = normalizeOutput(rawRepairOutput, article.tags);
       modelUsed = rawRepairOutput.__aiMeta?.modelUsed || null;
     } catch (repairError) {
       if (isRateLimitedError(repairError)) {
-        return buildSourceFallback(article, extracted.text, extracted.sourceType);
+        return rateLimitedResult(repairError.retryAfterMs, extracted.sourceType);
       }
       return {
         status: "FAILED",
@@ -216,18 +222,17 @@ export async function generateDetailedSummary(article) {
   const overlap = overlapReason();
   if (overlap) {
     try {
-      const repaired = await generateStructured({
-        systemPrompt: SYSTEM_PROMPT,
-        userPrompt: buildRepairPrompt(
+      const repaired = await generate(
+        buildRepairPrompt(
           input,
           `${overlap}. Write a new narrative with different sentence structure and details from the source.`,
         ),
-      });
+      );
       output = normalizeOutput(repaired, article.tags);
       modelUsed = repaired.__aiMeta?.modelUsed || modelUsed;
     } catch (repairError) {
       if (isRateLimitedError(repairError)) {
-        return buildSourceFallback(article, extracted.text, extracted.sourceType);
+        return rateLimitedResult(repairError.retryAfterMs, extracted.sourceType);
       }
       return {
         status: "FAILED",
@@ -301,6 +306,15 @@ export async function generateTopDetailedSummaries() {
     } finally {
       // The status update below is deliberately kept in the same loop so an
       // exception can never leave a lock in PENDING indefinitely.
+    }
+    if (result.status === "RATE_LIMITED") {
+      // Not this article's fault: hand it back for a later run, and stop here
+      // because every remaining candidate would hit the same limit.
+      await News.findByIdAndUpdate(article._id, {
+        detailedStatus: "NONE",
+        detailedLockedAt: null,
+      });
+      break;
     }
     const update = {
       detailedStatus: result.status,

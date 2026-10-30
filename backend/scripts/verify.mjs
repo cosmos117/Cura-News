@@ -50,17 +50,17 @@ const api = async (path, { method = "GET", token, body, headers = {} } = {}) => 
 async function main() {
   await check("detailed text formatter repairs spacing and sentence-safe paragraphs", async () => {
     const result = formatDetailedText(
-      "The RSS (RSS)concluded its celebrations. It has grown rapidly while one\nof the 32 organisations it inspired expanded. Its legacy remains contested. Supporters cite service. Critics cite exclusion. The debate continues.",
+      "The RSS (RSS)concluded its celebrations. It has grown rapidly while one\nof the 32 organisations it inspired expanded over the last decade. Its legacy remains contested among scholars and policymakers. Supporters cite service and reach. Critics cite exclusion and narrow leadership. The debate continues across conferences and journals. Reformers argue the network should widen its base before it plans its next cycle of expansion. Others insist that the original mission still binds the group. Both sides agree that the numbers now matter more than the arguments. Whatever the committee decides, the outcome will shape how the organisation is remembered by the people who built it.",
     );
     assert.equal(result.valid, true);
     assert.match(result.text, /\(RSS\) concluded/);
-    assert.equal(result.paragraphs.length, 3);
+    assert.equal(result.paragraphs.length, 2);
     result.paragraphs.forEach((paragraph) => assert.match(paragraph, /[.!?]["'»”’)\]]?$/));
   });
 
   await check("detailed text formatter preserves decimals and abbreviations", async () => {
     const result = formatDetailedText(
-      "The report cites Rs.5.2 crore and 3.5% growth. U.S. officials referred to e.g. No. 1 priorities. A. P. J. Abdul Kalam remains widely remembered.",
+      "The report cites Rs.5.2 crore and 3.5% growth in the eastern districts. U.S. officials referred to e.g. No. 1 priorities in the review meeting. A. P. J. Abdul Kalam remains widely remembered across the country. The audit team said the figure was provisional. Officials said the final number would be published next quarter. Two departments confirmed the same total independently. The commission noted that early estimates had ranged widely. Many analysts had warned that the collection cycle was incomplete. The ministry published the underlying data alongside the statement. The final tally nonetheless matched the lower projection. The regional offices had reported a similar pattern earlier.",
     );
     assert.equal(result.valid, true);
     assert.match(result.text, /Rs\.5\.2 crore/);
@@ -78,10 +78,10 @@ async function main() {
     });
   });
 
-  await check("detailed text formatter handles short text", async () => {
+  await check("detailed text formatter rejects a narrative outside the word budget", async () => {
     const result = formatDetailedText("A short sentence. Another one.");
-    assert.equal(result.valid, true);
-    assert.ok(result.paragraphs.length >= 1 && result.paragraphs.length <= 2);
+    assert.equal(result.valid, false);
+    assert.equal(result.reason, "detailed must be 100-120 words");
   });
 
   mongod = await MongoMemoryServer.create();
@@ -94,6 +94,12 @@ async function main() {
   // over any local .env and the assertions below stay deterministic.
   process.env.AI_PROVIDER = "gemini";
   process.env.GEMINI_MODEL = "gemini-3.8-flash";
+  // Fake AI keys: both providers count as configured, but nothing in the suite
+  // can spend real quota. Tests that need AI replies stub axios.post.
+  process.env.GEMINI_API_KEY = "test-gemini-key";
+  process.env.GROQ_API_KEY = "test-groq-key";
+  process.env.GEMINI_RPM = "10";
+  process.env.GROQ_RPM = "30";
 
   const { connectDB, disconnectDB } = await import("../src/config/database.js");
   await connectDB();
@@ -192,6 +198,145 @@ async function main() {
     assert.equal(article.detailSourceType, undefined);
   });
 
+  // ---------- AI provider scheduling ----------
+  // axios.post is stubbed here: `aiReplies[provider]` returns a reply or
+  // throws, and `aiCalls` records which provider each request went to.
+  const aiService = await import("../src/services/aiService.js");
+  const { config: aiEnv } = await import("../src/config/env.js");
+  const originalAxiosPost = axios.post;
+  const aiCalls = [];
+  const aiBodies = [];
+  let aiReplies = {};
+  const providerOf = (url) => (String(url).includes("groq.com") ? "groq" : "gemini");
+  const aiReply = (provider, json, headers = {}) =>
+    provider === "groq"
+      ? { data: { choices: [{ message: { content: JSON.stringify(json) } }] }, headers }
+      : { data: { candidates: [{ content: { parts: [{ text: JSON.stringify(json) }] } }] }, headers };
+  const httpError = (status, data = {}, headers = {}) => {
+    const error = new Error(`Request failed with status code ${status}`);
+    error.response = { status, data, headers };
+    return error;
+  };
+  // What Gemini's free tier actually answers once its 20 requests/day are used.
+  const geminiDailyQuotaUsed = () => {
+    throw httpError(429, {
+      error: {
+        code: 429,
+        message: "You exceeded your current quota. Please retry in 18h8m30.31s.",
+        details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "65310s" }],
+      },
+    });
+  };
+  const groqRateLimited = (seconds) => () => {
+    throw httpError(429, { error: { message: "Rate limit reached" } }, { "retry-after": String(seconds) });
+  };
+  const askAi = (priority) =>
+    aiService.generateStructured({ systemPrompt: "s", userPrompt: "u", maxTokens: 100, priority });
+  const stubAi = (replies) => {
+    aiService.resetAiRateState();
+    aiCalls.length = 0;
+    aiReplies = replies;
+    axios.post = async (url, body) => {
+      const provider = providerOf(url);
+      aiCalls.push(provider);
+      aiBodies.push({ provider, body });
+      if (!aiReplies[provider]) throw httpError(500, { error: { message: "no stub" } });
+      return aiReplies[provider]();
+    };
+  };
+  const unstubAi = () => {
+    axios.post = originalAxiosPost;
+    aiService.resetAiRateState();
+  };
+
+  await check("a Gemini 429 does not block Groq, and Gemini's retry hint is honoured", async () => {
+    stubAi({ gemini: geminiDailyQuotaUsed, groq: () => aiReply("groq", { ok: 1 }) });
+    try {
+      const first = await askAi("interactive");
+      assert.equal(first.ok, 1);
+      assert.equal(first.__aiMeta.provider, "groq");
+      assert.equal(first.__aiMeta.modelUsed, aiEnv.GROQ_MODEL);
+      assert.deepEqual(aiCalls, ["gemini", "groq"]);
+      // At default effort gpt-oss can spend its whole output budget reasoning
+      // and return an empty answer.
+      assert.equal(aiBodies.at(-1).body.reasoning_effort, "low");
+
+      // Before the fix, every call here failed for 60s without trying Groq.
+      aiCalls.length = 0;
+      await askAi("interactive");
+      await askAi("background");
+      assert.deepEqual(aiCalls, ["groq", "groq"], "Gemini stays paused for its 18h hint");
+    } finally {
+      unstubAi();
+    }
+  });
+
+  await check("a reader is not kept waiting when every provider is rate-limited for long", async () => {
+    stubAi({ gemini: geminiDailyQuotaUsed, groq: groqRateLimited(450) });
+    try {
+      const started = Date.now();
+      await assert.rejects(askAi("interactive"), (error) => {
+        assert.equal(error.statusCode, 429);
+        assert.ok(
+          error.retryAfterMs > 440_000 && error.retryAfterMs <= 450_000,
+          `retryAfterMs should follow Groq's 450s hint, got ${error.retryAfterMs}`,
+        );
+        return true;
+      });
+      assert.ok(Date.now() - started < 2000, "must answer at once, not wait out the cooldown");
+      assert.equal(aiService.getAiAvailability("interactive").available, false);
+    } finally {
+      unstubAi();
+    }
+  });
+
+  await check("a short provider cooldown is waited out for a reader", async () => {
+    let groqCalls = 0;
+    stubAi({
+      gemini: geminiDailyQuotaUsed,
+      groq: () => {
+        groqCalls += 1;
+        if (groqCalls === 1) groqRateLimited(1)();
+        return aiReply("groq", { ok: 2 });
+      },
+    });
+    try {
+      const result = await askAi("interactive");
+      assert.equal(result.ok, 2);
+      assert.equal(groqCalls, 2);
+    } finally {
+      unstubAi();
+    }
+  });
+
+  await check("background work leaves Groq's token reserve for readers", async () => {
+    stubAi({
+      gemini: geminiDailyQuotaUsed,
+      groq: () =>
+        aiReply("groq", { ok: 3 }, {
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-tokens": "2000",
+          "x-ratelimit-reset-tokens": "1m0s",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-remaining-requests": "900",
+          "x-ratelimit-reset-requests": "2h24m",
+        }),
+    });
+    try {
+      await askAi("interactive");
+      // 2,000 tokens left, refilling 6,000 per minute. A reader may use them
+      // now; background must wait until the 4,000-token reserve is back.
+      assert.equal(aiService.getAiAvailability("interactive").retryAfterMs, 0);
+      const background = aiService.getAiAvailability("background").retryAfterMs;
+      assert.ok(
+        background > 15_000 && background <= 20_000,
+        `background should wait ~20s for the reserve, got ${background}`,
+      );
+    } finally {
+      unstubAi();
+    }
+  });
+
   // ---------- config / env ----------
   await check("dotenv/env config loads real values", async () => {
     const { config } = await import("../src/config/env.js");
@@ -272,6 +417,114 @@ async function main() {
     assert.equal(res.status, 401);
     assert.match(res.data.message, /invalid email or password/i);
   });
+
+  // ---------- Google sign-in ----------
+  // Google is stubbed: tokeninfo reports `tokenAudience`, and userinfo returns
+  // whatever profile the test sets. A separate client IP keeps these requests
+  // out of the shared auth rate-limit bucket the brute-force test relies on.
+  const { OAuth2Client } = await import("google-auth-library");
+  const { config: appConfig } = await import("../src/config/env.js");
+  const originalTokenInfo = OAuth2Client.prototype.getTokenInfo;
+  const originalAxiosGet = axios.get;
+  let googlePayload = null;
+  let tokenAudience = null;
+  OAuth2Client.prototype.getTokenInfo = async function () {
+    if (!googlePayload) throw new Error("invalid_token");
+    return { aud: tokenAudience, scopes: ["openid", "email", "profile"] };
+  };
+  axios.get = async (url, options) => {
+    if (!String(url).includes("googleapis.com")) return originalAxiosGet(url, options);
+    return { data: googlePayload };
+  };
+  let googleIp = 0;
+  const googleAuth = (accessToken = "google-access-token") =>
+    api("/auth/google", {
+      method: "POST",
+      body: { accessToken },
+      headers: { "X-Forwarded-For": `10.0.0.${++googleIp}` },
+    });
+  const googleUser = {
+    sub: "google-sub-123",
+    email: "Google.Reader@Example.design",
+    email_verified: true,
+    name: "Google Reader",
+    picture: "https://lh3.googleusercontent.com/a/avatar",
+  };
+
+  await check("Google sign-in answers 503 when GOOGLE_CLIENT_ID is unset", async () => {
+    appConfig.GOOGLE_CLIENT_ID = "";
+    const res = await googleAuth();
+    assert.equal(res.status, 503);
+    appConfig.GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com";
+    tokenAudience = appConfig.GOOGLE_CLIENT_ID;
+  });
+
+  await check("Google sign-in rejects an invalid or missing credential", async () => {
+    googlePayload = null;
+    assert.equal((await googleAuth()).status, 401);
+    assert.equal((await googleAuth("")).status, 400);
+  });
+
+  await check("Google sign-in rejects a token issued to another app", async () => {
+    googlePayload = googleUser;
+    tokenAudience = "someone-elses-app.apps.googleusercontent.com";
+    assert.equal((await googleAuth()).status, 401);
+    tokenAudience = appConfig.GOOGLE_CLIENT_ID;
+  });
+
+  await check("Google sign-in rejects an unverified email", async () => {
+    googlePayload = { ...googleUser, email_verified: false };
+    assert.equal((await googleAuth()).status, 401);
+  });
+
+  let googleUserId;
+  await check("Google sign-in creates an account and returns a working token", async () => {
+    googlePayload = googleUser;
+    const res = await googleAuth();
+    assert.equal(res.status, 201);
+    assert.equal(res.data.user.email, "google.reader@example.design");
+    assert.equal(res.data.user.avatar, googleUser.picture);
+    googleUserId = res.data.user.id;
+
+    const me = await api("/auth/me", { token: res.data.token });
+    assert.equal(me.status, 200);
+    assert.equal(me.data.user.name, "Google Reader");
+  });
+
+  await check("Google sign-in again reuses the same account", async () => {
+    googlePayload = { ...googleUser, email: "renamed@example.com" };
+    const res = await googleAuth();
+    assert.equal(res.status, 200);
+    assert.equal(res.data.user.id, googleUserId);
+  });
+
+  await check("Google sign-in links to an existing password account by email", async () => {
+    googlePayload = { ...googleUser, sub: "google-sub-456", email };
+    const res = await googleAuth();
+    assert.equal(res.status, 200);
+    assert.equal(res.data.user.email, email);
+
+    const password = await api("/auth/login", {
+      method: "POST",
+      body: { email, password: "supersecret1" },
+      headers: { "X-Forwarded-For": "10.0.1.1" },
+    });
+    assert.equal(password.status, 200, "password login must still work after linking");
+    assert.equal(password.data.user.id, res.data.user.id);
+  });
+
+  await check("password login to a Google-only account is a plain 401", async () => {
+    const res = await api("/auth/login", {
+      method: "POST",
+      body: { email: "google.reader@example.design", password: "whatever123" },
+      headers: { "X-Forwarded-For": "10.0.1.2" },
+    });
+    assert.equal(res.status, 401);
+    assert.match(res.data.message, /invalid email or password/i);
+  });
+
+  OAuth2Client.prototype.getTokenInfo = originalTokenInfo;
+  axios.get = originalAxiosGet;
 
   await check("garbage token is rejected", async () => {
     const res = await api("/auth/me", { token: "not-a-real-token" });
@@ -358,6 +611,37 @@ async function main() {
     assert.equal(res.status, 401);
   });
 
+  await check("a rate-limited detailed request answers 429 and keeps the article retryable", async () => {
+    stubAi({ gemini: geminiDailyQuotaUsed, groq: groqRateLimited(450) });
+    const originalAxiosGet = axios.get;
+    let pageFetched = false;
+    try {
+      await assert.rejects(askAi("interactive")); // both providers now cooling down
+      axios.get = async () => {
+        pageFetched = true;
+        throw new Error("the article page should not be fetched");
+      };
+
+      const res = await api(`/news/${articleId}/detailed`, { method: "POST", token, body: {} });
+      assert.equal(res.status, 429);
+      assert.ok(res.data.retryAfterMs > 440_000, `retryAfterMs was ${res.data.retryAfterMs}`);
+      assert.equal(res.data.data.detailedStatus, "NONE");
+      assert.equal(pageFetched, false, "no page fetch when no AI capacity is coming");
+      assert.equal((await News.findById(articleId).lean()).detailedStatus, "NONE");
+
+      // The background batch must hand articles back too, not mark them FAILED.
+      const { generateTopDetailedSummaries } = await import(
+        "../src/services/detailedSummaryService.js"
+      );
+      const batch = await generateTopDetailedSummaries();
+      assert.equal(batch.completed, 0);
+      assert.equal(await News.countDocuments({ detailedStatus: { $in: ["FAILED", "PENDING"] } }), 0);
+    } finally {
+      axios.get = originalAxiosGet;
+      unstubAi();
+    }
+  });
+
   await check("POST /admin/ingest returns 202 with the cron secret", async () => {
     const res = await api("/admin/ingest", {
       method: "POST",
@@ -409,32 +693,6 @@ async function main() {
   });
 
   // ---------- ai routes ----------
-  await check("POST /ai/summarize requires auth (was public and billed)", async () => {
-    const res = await api("/ai/summarize", {
-      method: "POST",
-      body: { articleText: "x".repeat(200) },
-    });
-    assert.equal(res.status, 401);
-  });
-
-  await check("POST /ai/batch-summarize requires auth", async () => {
-    const res = await api("/ai/batch-summarize", {
-      method: "POST",
-      body: { articles: ["x".repeat(200)] },
-    });
-    assert.equal(res.status, 401);
-  });
-
-  await check("GET /ai/health is honest about being a config check", async () => {
-    const res = await api("/ai/health");
-    assert.equal(res.status, 200);
-    assert.equal(
-      res.data.data.status,
-      res.data.data.apiKeyConfigured ? "configured" : "not_configured",
-    );
-  });
-
-  // ---------- news create ----------
   await check("POST /news requires auth (was public)", async () => {
     const res = await api("/news", {
       method: "POST",
@@ -530,7 +788,7 @@ async function main() {
 
   const politicsArticle = await News.create({
     source: "The Hindu",
-    category: "Politics",
+    category: "Politics & Governance",
     headline: "Parliament approves quantumledger digital payments amendment",
     summary:
       "The parliament approved the quantumledger amendment, which rewrites the settlement rules for digital payments across the country.",
@@ -541,7 +799,7 @@ async function main() {
 
   const techArticle = await News.create({
     source: "Indian Express",
-    category: "Tech",
+    category: "Science & Technology",
     headline: "New semiconductor fabrication plant opens in Pune",
     summary:
       "A semiconductor fabrication plant began operations in Pune, adding capacity for advanced chip packaging in the country.",
@@ -552,7 +810,7 @@ async function main() {
 
   await News.create({
     source: "Times of India",
-    category: "Business",
+    category: "Economy & Business",
     headline: "Sensex gains as quarterly profits rise across listed firms",
     summary:
       "The Sensex closed higher as quarterly profits rose across listed firms, with the banking index leading the advance.",
@@ -561,7 +819,7 @@ async function main() {
     date: new Date(),
   });
 
-  await check("category defaults to Other when not supplied", async () => {
+  await check("category defaults to Misc when not supplied", async () => {
     const plain = await News.create({
       source: "The Hindu",
       headline: "Weather department issues advisory for coastal districts",
@@ -571,7 +829,7 @@ async function main() {
       tags: ["Science"],
       date: new Date(),
     });
-    assert.equal(plain.category, "Other");
+    assert.equal(plain.category, "Misc");
   });
 
   await check("category derivation prefers the feed category over keywords", async () => {
@@ -580,9 +838,9 @@ async function main() {
     const result = resolveCategory({
       feedCategory: "business",
       text: "Parliament discussed the budget allocation in detail",
-      aiCategory: "Tech",
+      aiCategory: "Science & Technology",
     });
-    assert.equal(result.category, "Business");
+    assert.equal(result.category, "Economy & Business");
     assert.equal(result.derivedBy, "feed");
   });
 
@@ -590,9 +848,9 @@ async function main() {
     const result = resolveCategory({
       feedCategory: "general",
       text: "The parliament debated the new electoral reform bill",
-      aiCategory: "Business",
+      aiCategory: "Economy & Business",
     });
-    assert.equal(result.category, "Politics");
+    assert.equal(result.category, "Politics & Governance");
     assert.equal(result.derivedBy, "keywords");
   });
 
@@ -600,7 +858,7 @@ async function main() {
     // No feed label, and the keyword rules deliberately do not fire on this
     // text (\b-anchored, so "said" cannot match "ai" and "police" cannot match
     // any Politics term).
-    const text = "Traffic was slow on the highway over the festival weekend, police said.";
+    const text = "Traffic was slow on the highway over the weekend, officials said.";
     assert.equal(categoryFromKeywords(text), null, "fixture must not match any keyword rule");
 
     const result = resolveCategory({
@@ -612,9 +870,9 @@ async function main() {
     assert.equal(result.derivedBy, "ai");
   });
 
-  await check("category derivation lands on Other with nothing to go on", async () => {
+  await check("category derivation lands on Misc with nothing to go on", async () => {
     const result = resolveCategory({ feedCategory: "general", text: "zorb blimp" });
-    assert.equal(result.category, "Other");
+    assert.equal(result.category, "Misc");
     assert.equal(result.derivedBy, "default");
   });
 
@@ -622,34 +880,34 @@ async function main() {
     // "ai" must not match "said", "war" must not match "award".
     assert.equal(categoryFromKeywords("He said the plan was unclear"), null);
     assert.equal(categoryFromKeywords("They received an award for the war memoir"), null);
-    assert.equal(categoryFromFeed("technology"), "Tech");
+    assert.equal(categoryFromFeed("technology"), "Science & Technology");
   });
 
   await check("GET /news?category= filters by category", async () => {
-    const res = await api("/news?category=Tech");
+    const res = await api("/news?category=Science%20%26%20Technology");
     assert.equal(res.status, 200);
     assert.ok(res.data.data.length >= 1, "should find the Tech article");
     assert.ok(
-      res.data.data.every((a) => a.category === "Tech"),
+      res.data.data.every((a) => a.category === "Science & Technology"),
       "every returned article must be Tech",
     );
   });
 
   await check("GET /news combines search + category + source as AND", async () => {
-    const hit = await api("/news?search=quantumledger&category=Politics&source=The%20Hindu");
+    const hit = await api("/news?search=quantumledger&category=Politics%20%26%20Governance&source=The%20Hindu");
     assert.equal(hit.status, 200);
     assert.equal(hit.data.data.length, 1, "all three filters should match one article");
     assert.equal(hit.data.data[0]._id, politicsArticle._id.toString());
 
     // The same search with a conflicting category must return nothing, which
     // proves the filters intersect rather than each overriding the last.
-    const miss = await api("/news?search=quantumledger&category=Tech");
+    const miss = await api("/news?search=quantumledger&category=Science%20%26%20Technology");
     assert.equal(miss.status, 200);
     assert.equal(miss.data.data.length, 0, "search + conflicting category should be empty");
 
     // And search combined with a conflicting source must also be empty.
     const missSource = await api(
-      "/news?search=quantumledger&category=Politics&source=Indian%20Express",
+      "/news?search=quantumledger&category=Politics%20%26%20Governance&source=Indian%20Express",
     );
     assert.equal(missSource.data.data.length, 0, "conflicting source should be empty");
   });
@@ -661,7 +919,7 @@ async function main() {
   });
 
   await check("GET /news returns category facets that survive the category filter", async () => {
-    const res = await api("/news?category=Politics");
+    const res = await api("/news?category=Politics%20%26%20Governance");
     assert.equal(res.status, 200);
 
     // Every category is present, including the zero-count ones, so the chip
@@ -676,8 +934,8 @@ async function main() {
     // Counts come from the filter MINUS the category constraint, so selecting
     // Politics must not zero out the other cards.
     assert.ok(
-      res.data.facets.byCategory.Tech >= 1,
-      "Tech facet should still be counted while Politics is selected",
+      res.data.facets.byCategory["Science & Technology"] >= 1,
+      "Science & Technology facet should still be counted while Politics is selected",
     );
     assert.ok(res.data.facets.bySource["The Hindu"] >= 1, "source facets should be present");
     assert.ok(res.data.facets.byTag.Polity >= 1, "tag facets should be present");
@@ -692,12 +950,12 @@ async function main() {
         "The regulator published fresh guidelines for digital lending platforms, tightening disclosure norms for interimised loans.",
       bulletPoints: ["Guidelines published", "Disclosure norms tightened", "Compliance by next quarter"],
       tags: ["Economy"],
-      category: "Business",
+      category: "Economy & Business",
     };
 
     const ok = await api("/news", { method: "POST", token, body: payload });
     assert.equal(ok.status, 201);
-    assert.equal(ok.data.data.category, "Business");
+    assert.equal(ok.data.data.category, "Economy & Business");
 
     const bad = await api("/news", {
       method: "POST",
@@ -706,6 +964,236 @@ async function main() {
     });
     assert.equal(bad.status, 400);
     assert.match(bad.data.message, /Invalid category/);
+  });
+
+  // ---------- bookmarks ----------
+  const Bookmark = (await import("../src/models/Bookmark.js")).default;
+  const saved = await News.create({
+    source: "The Hindu",
+    headline: "Bookmarked story survives the nightly reset",
+    summary: "A story saved by a reader must stay readable after all articles are deleted at midnight.",
+    tags: ["Polity"],
+    url: "https://example.com/bookmarked-story",
+    date: new Date(),
+    isPublished: true,
+  });
+
+  await check("saving a bookmark sets a 24h expiry and stores a snapshot", async () => {
+    const res = await api(`/bookmarks/${saved._id}`, { method: "POST", token });
+    assert.equal(res.status, 200);
+    const bookmark = await Bookmark.findOne({ article: saved._id }).lean();
+    assert.equal(bookmark.snapshot.headline, saved.headline);
+    const hoursLeft = (bookmark.expiresAt - Date.now()) / 3600000;
+    assert.ok(hoursLeft > 23.9 && hoursLeft <= 24, `expiry was ${hoursLeft}h away`);
+  });
+
+  await check("re-saving a bookmark does not extend its expiry", async () => {
+    const before = (await Bookmark.findOne({ article: saved._id }).lean()).expiresAt;
+    await api(`/bookmarks/${saved._id}`, { method: "POST", token });
+    const after = (await Bookmark.findOne({ article: saved._id }).lean()).expiresAt;
+    assert.equal(after.getTime(), before.getTime());
+  });
+
+  await check("deleting articles refreshes the snapshot, and the bookmark stays readable", async () => {
+    await News.updateOne(
+      { _id: saved._id },
+      { detailedStatus: "DONE", detailedSummary: "Generated after the reader saved it." },
+    );
+    await News.deleteMany({ _id: saved._id });
+
+    const list = await api("/bookmarks", { token });
+    assert.equal(list.status, 200);
+    assert.equal(list.data.pagination.total, 1);
+    assert.equal(list.data.data.length, 1);
+    assert.equal(list.data.data[0].archived, true);
+    assert.equal(list.data.data[0].detailedSummary, "Generated after the reader saved it.");
+
+    const one = await api(`/bookmarks/${saved._id}`, { token });
+    assert.equal(one.status, 200);
+    assert.equal(one.data.data.headline, saved.headline);
+    assert.equal(one.data.data.detailedStatus, "DONE");
+
+    const status = await api(`/bookmarks/${saved._id}/status`, { token });
+    assert.equal(status.data.data.bookmarked, true);
+  });
+
+  await check("an expired bookmark is hidden before the TTL monitor removes it", async () => {
+    await Bookmark.updateOne({ article: saved._id }, { expiresAt: new Date(Date.now() - 1000) });
+    const list = await api("/bookmarks", { token });
+    assert.equal(list.data.pagination.total, 0);
+    assert.equal(list.data.data.length, 0);
+    const one = await api(`/bookmarks/${saved._id}`, { token });
+    assert.equal(one.status, 404);
+    const status = await api(`/bookmarks/${saved._id}/status`, { token });
+    assert.equal(status.data.data.bookmarked, false);
+  });
+
+  await check("bookmark expiry is backed by a TTL index", async () => {
+    const indexes = await Bookmark.collection.indexes();
+    const ttl = indexes.find((index) => index.key.expiresAt === 1);
+    assert.equal(ttl?.expireAfterSeconds, 0);
+  });
+
+
+  // ---------- For You picks ----------
+  // Own client IPs: the brute-force test above has used up the shared auth
+  // rate-limit bucket for the default one.
+  let readerIp = 0;
+  const asReader = (path, options = {}) =>
+    api(path, { ...options, headers: { "X-Forwarded-For": `10.0.2.${++readerIp}`, ...options.headers } });
+  const registerReader = async (label) => {
+    const res = await asReader("/auth/register", {
+      method: "POST",
+      body: {
+        name: `${label} Reader`,
+        email: `${label}-${Date.now()}@example.com`,
+        password: "supersecret1",
+        confirmPassword: "supersecret1",
+      },
+    });
+    assert.equal(res.status, 201, `register ${label}: ${res.data?.message}`);
+    return { token: res.data.token, email: res.data.user.email };
+  };
+  const picker = await registerReader("picker");
+
+  const seedToday = (source, category, slug) =>
+    News.create({
+      source,
+      category,
+      headline: `${category} story from ${source} for the For You feed`,
+      summary: `A ${category} story from ${source}, seeded so the personalised feed has something to choose between.`,
+      tags: ["Polity"],
+      url: `https://example.com/for-you-${slug}`,
+      date: new Date(),
+      publishedDayKey: istDayKey(),
+      isPublished: true,
+    });
+  const [hinduSports, hinduScience, toiSports, hinduHealth] = await Promise.all([
+    seedToday("The Hindu", "Sports", "hindu-sports"),
+    seedToday("The Hindu", "Science & Technology", "hindu-science"),
+    seedToday("Times of India", "Sports", "toi-sports"),
+    seedToday("The Hindu", "Health", "hindu-health"),
+  ]);
+
+  await check("new accounts start without picks, and For You asks for them", async () => {
+    const me = await api("/auth/me", { token: picker.token });
+    assert.deepEqual(me.data.user.preferences, { sources: [], topics: [], onboardedAt: null });
+    assert.equal(me.data.user.hasPassword, true);
+    assert.equal(me.data.user.hasGoogle, false);
+
+    const feed = await api("/news/for-you", { token: picker.token });
+    assert.equal(feed.status, 409);
+  });
+
+  await check("picks are validated", async () => {
+    const save = (body) => api("/me/preferences", { method: "PUT", token: picker.token, body });
+    assert.equal((await save({ sources: ["The Daily Planet"], topics: ["sports"] })).status, 400);
+    assert.equal((await save({ sources: ["The Hindu"], topics: [] })).status, 400);
+    assert.equal((await save({ sources: "The Hindu", topics: ["sports"] })).status, 400);
+    assert.equal((await save({ sources: ["The Hindu"], topics: ["astrology"] })).status, 400);
+  });
+
+  await check("saved picks show up on the account", async () => {
+    const res = await api("/me/preferences", {
+      method: "PUT",
+      token: picker.token,
+      body: { sources: ["The Hindu", "The Hindu"], topics: ["sports", "science-technology"] },
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.data.preferences.sources, ["The Hindu"], "duplicates dropped");
+    assert.ok(res.data.preferences.onboardedAt);
+
+    const me = await api("/auth/me", { token: picker.token });
+    assert.deepEqual(me.data.user.preferences.topics, ["sports", "science-technology"]);
+  });
+
+  await check("For You holds only the picked sources AND topics", async () => {
+    const res = await api("/news/for-you?limit=100", { token: picker.token });
+    assert.equal(res.status, 200);
+    const ids = res.data.data.map((article) => article._id);
+    assert.ok(ids.includes(String(hinduSports._id)));
+    assert.ok(ids.includes(String(hinduScience._id)));
+    assert.ok(!ids.includes(String(toiSports._id)), "unpicked source");
+    assert.ok(!ids.includes(String(hinduHealth._id)), "unpicked topic");
+    for (const article of res.data.data) {
+      assert.equal(article.source, "The Hindu");
+      assert.ok(["Sports", "Science & Technology"].includes(article.category));
+    }
+    assert.equal(res.data.facets.byCategory.Health, 0, "counts stay inside the picks");
+    assert.equal(res.data.facets.bySource["Times of India"], 0);
+  });
+
+  await check("card filters narrow For You but never widen it", async () => {
+    const sports = await api("/news/for-you?topic=Sports&limit=100", { token: picker.token });
+    assert.ok(sports.data.data.length > 0);
+    assert.ok(sports.data.data.every((article) => article.category === "Sports"));
+
+    const health = await api("/news/for-you?topic=Health", { token: picker.token });
+    assert.equal(health.status, 200);
+    assert.equal(health.data.pagination.total, 0);
+
+    const toi = await api("/news/for-you?source=Times%20of%20India", { token: picker.token });
+    assert.equal(toi.data.pagination.total, 0);
+  });
+
+  await check("skipping the picker is remembered without inventing picks", async () => {
+    const skipper = await registerReader("skipper");
+    const res = await api("/me/onboarding/skip", { method: "POST", token: skipper.token });
+    assert.equal(res.status, 200);
+    assert.ok(res.data.preferences.onboardedAt);
+    assert.deepEqual(res.data.preferences.topics, []);
+    assert.equal((await api("/news/for-you", { token: skipper.token })).status, 409);
+  });
+
+  // ---------- account deletion ----------
+  const User = (await import("../src/models/User.js")).default;
+  const { generateToken } = await import("../src/services/jwtService.js");
+
+  await check("deleting an account needs the confirm flag", async () => {
+    const reader = await registerReader("careful");
+    const res = await api("/me", { method: "DELETE", token: reader.token, body: {} });
+    assert.equal(res.status, 400);
+    assert.equal((await api("/auth/me", { token: reader.token })).status, 200, "still active");
+  });
+
+  await check("deleting an account removes it and its saved articles for good", async () => {
+    const reader = await registerReader("leaver");
+    const me = await api("/auth/me", { token: reader.token });
+    await api(`/bookmarks/${hinduSports._id}`, { method: "POST", token: reader.token });
+    const Bookmark = (await import("../src/models/Bookmark.js")).default;
+    assert.equal(await Bookmark.countDocuments({ user: me.data.user.id }), 1);
+
+    const res = await api("/me", { method: "DELETE", token: reader.token, body: { confirm: "DELETE" } });
+    assert.equal(res.status, 200);
+    assert.equal(await User.countDocuments({ email: reader.email }), 0);
+    assert.equal(await Bookmark.countDocuments({ user: me.data.user.id }), 0);
+    assert.equal((await api("/auth/me", { token: reader.token })).status, 404, "old token is useless");
+
+    const login = await asReader("/auth/login", {
+      method: "POST",
+      body: { email: reader.email, password: "supersecret1" },
+    });
+    assert.equal(login.status, 401, "cannot sign back in");
+    const again = await asReader("/auth/register", {
+      method: "POST",
+      body: { name: "Leaver Again", email: reader.email, password: "supersecret1", confirmPassword: "supersecret1" },
+    });
+    assert.equal(again.status, 201, "the email is free to sign up again");
+  });
+
+  await check("Google-only accounts delete the same way", async () => {
+    const googleOnly = await User.create({
+      name: "Google Only",
+      email: `google-only-${Date.now()}@example.com`,
+      googleId: `google-only-${Date.now()}`,
+    });
+    const res = await api("/me", {
+      method: "DELETE",
+      token: generateToken(googleOnly._id.toString()),
+      body: { confirm: "DELETE" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(await User.countDocuments({ _id: googleOnly._id }), 0);
   });
 
   // ---------- teardown ----------

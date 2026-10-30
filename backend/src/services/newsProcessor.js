@@ -277,8 +277,15 @@ class NewsProcessor {
     const summarized = [];
     let pendingBatch = [];
     let aiCalls = 0;
+    // A 429 here means no provider frees up within a background call's wait
+    // limit, so the rest of this run uses the fallback straight away instead
+    // of every article waiting out the same limit.
+    let aiPaused = false;
     for (const article of articles) {
       try {
+        if (aiPaused) {
+          throw new Error("AI rate-limited for this run; using deterministic fallback");
+        }
         // Single AI call produces headline/summary/keyFacts/detailed together
         // so the model can keep them distinct (services/content/).
         if (aiCalls >= config.AI_DAILY_LIMIT) {
@@ -320,6 +327,12 @@ class NewsProcessor {
           pendingBatch = [];
         }
       } catch (error) {
+        if (error.statusCode === 429 && !aiPaused) {
+          aiPaused = true;
+          this.logger.warn("AI rate-limited; pausing AI for the rest of this run", {
+            retryAfterMs: error.retryAfterMs,
+          });
+        }
         // If AI fails, fall back to rule-based summary from RSS description
         this.logger.warn("AI summarization failed, using fallback", {
           headline: article.headline?.substring(0, 50),
@@ -464,21 +477,10 @@ class NewsProcessor {
           topicConfidence: article.topicConfidence,
           subtopics: article.subtopics || [],
           url: article.url,
-          // Detailed narrative. The ingestion call only sees the RSS snippet,
-          // so it produces a narrative only when that snippet was already FULL
-          // text (rare). Otherwise leave detailedStatus at its NONE default so
-          // the dedicated detailed path - which fetches the full article page -
-          // can still attempt it for top-N and on-demand requests. UNAVAILABLE
-          // is set by that path when the full text is genuinely blocked/thin,
-          // never here, or we would prevent a legitimate attempt.
-          ...(article.detailed
-            ? {
-                detailedSummary: article.detailed,
-                detailedStatus: "DONE",
-                detailedConfidence: article.confidence,
-                detailedGeneratedAt: new Date(),
-              }
-            : {}),
+          // Detailed summaries are generated only by the dedicated path,
+          // which fetches and validates the complete original article.
+          detailedStatus: "NONE",
+          detailedSummary: null,
           // `date` is the ingestion day used by the dashboard's current-day
           // query. Keep the publisher timestamp separately in `publishedAt`;
           // RSS feeds commonly retain items published before today.

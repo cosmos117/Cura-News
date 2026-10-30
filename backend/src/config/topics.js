@@ -13,7 +13,7 @@ export const TOPICS = [
   { id: "culture-lifestyle", label: "Culture & Lifestyle", definition: "Arts, heritage, food, travel, fashion, traditions, and everyday life.", includeKeywords: ["culture", "heritage", "festival", "food", "travel", "tourism", "fashion", "lifestyle", "art", "museum", "bathukamma", "dolls", "books", "restoration"], excludeKeywords: [] },
   { id: "sports", label: "Sports", definition: "Competitive sport, athletes, teams, tournaments, and sporting bodies.", includeKeywords: ["sport", "sports", "sports complex", "cricket", "football", "tennis", "olympic", "medal", "match", "player", "athlete", "athletes", "tournament", "championship", "rain-hit", "golf", "motorsport", "ranji trophy"], excludeKeywords: [] },
   { id: "entertainment", label: "Entertainment", definition: "Film, television, music, books, celebrities, and popular culture.", includeKeywords: ["film", "movie", "cinema", "actor", "actress", "director", "singer", "music", "television", "celebrity", "obituary"], excludeKeywords: [] },
-  { id: "other", label: "Other", definition: "Stories that do not fit another primary topic.", includeKeywords: [], excludeKeywords: [] },
+  { id: "misc", label: "Misc", definition: "Stories that do not fit another primary topic.", includeKeywords: [], excludeKeywords: [] },
 ];
 
 export const TOPIC_IDS = TOPICS.map((topic) => topic.id);

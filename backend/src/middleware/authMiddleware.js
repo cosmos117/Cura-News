@@ -91,30 +91,3 @@ export const protect = asyncHandler(async (req, res, next) => {
     throw error;
   }
 });
-
-/**
- * Optional auth middleware - doesn't throw error if no token
- * Useful for routes that work with or without authentication
- *
- * Usage: app.get('/optional-auth-route', optionalAuth, controllerFunction)
- */
-export const optionalAuth = asyncHandler(async (req, res, next) => {
-  const token = extractToken(req);
-
-  if (token) {
-    try {
-      const user = await resolveUser(token);
-
-      req.user = {
-        userId: user._id.toString(),
-        email: user.email,
-        name: user.name,
-      };
-    } catch (error) {
-      // Silently ignore auth errors for optional auth
-      console.warn("Optional auth error:", error.message);
-    }
-  }
-
-  next();
-});

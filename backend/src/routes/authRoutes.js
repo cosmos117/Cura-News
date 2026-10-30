@@ -2,6 +2,7 @@ import express from "express";
 import {
   register,
   login,
+  googleLogin,
   getCurrentUser,
   logout,
 } from "../controllers/authController.js";
@@ -64,6 +65,19 @@ router.post("/register", authLimiter, register);
  * }
  */
 router.post("/login", authLimiter, login);
+
+/**
+ * POST /api/auth/google
+ * Sign in or sign up with a Google OAuth access token from the "Sign in with
+ * Google" popup. Creates the account on first use; returns the same shape as
+ * login.
+ *
+ * Request Body:
+ * {
+ *   "accessToken": "<Google access token>"
+ * }
+ */
+router.post("/google", authLimiter, googleLogin);
 
 /**
  * GET /api/auth/me

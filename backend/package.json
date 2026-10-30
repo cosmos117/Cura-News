@@ -8,15 +8,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test": "node scripts/verify.mjs",
-    "detailed:repair": "node scripts/repair-detailed-text.js",
     "feeds:check": "node scripts/check-feeds.mjs",
-    "topics:migrate": "node scripts/migrate-topics.mjs",
-    "topics:backfill": "node scripts/topics-backfill.mjs",
-    "topics:report": "node scripts/topics-report.mjs",
-    "topics:sample": "node scripts/topics-sample.mjs",
-    "topics:review": "node scripts/topics-review.mjs",
-    "content:backfill": "node scripts/backfill-content-fields.mjs",
-    "content:backfill-prompt": "node scripts/backfill-prompt-version.mjs"
+    "topics:report": "node scripts/topics-report.mjs"
   },
   "keywords": [
     "news",
@@ -33,6 +26,7 @@
     "dotenv": "^16.0.0",
     "express": "^4.18.0",
     "express-rate-limit": "^7.5.1",
+    "google-auth-library": "^9.15.1",
     "helmet": "^8.1.0",
     "jsdom": "^30.1.2",
     "jsonwebtoken": "^9.0.0",
@@ -49,5 +43,8 @@
   "allowScripts": {
     "esbuild": true,
     "mongodb-memory-server": true
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

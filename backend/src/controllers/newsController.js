@@ -2,7 +2,10 @@ import News from "../models/News.js";
 import { AppError, asyncHandler } from "../middleware/errorHandler.js";
 import { istDayKey, istDayRange } from "../utils/date.js";
 import { NEWS_CATEGORIES } from "../utils/category.js";
-import { TOPICS } from "../config/topics.js";
+import { TOPICS, TOPIC_LABELS } from "../config/topics.js";
+import User from "../models/User.js";
+import { config } from "../config/env.js";
+import { RATE_LIMITED_MESSAGE } from "../services/aiService.js";
 import {
   dailyDetailedCount,
   generateDetailedSummary,
@@ -25,7 +28,7 @@ const LEGACY_CATEGORY_TOPIC = {
   Tech: "science-technology",
   World: "world-affairs",
   Entertainment: "entertainment",
-  Other: "other",
+  Other: "misc",
 };
 
 /**
@@ -108,7 +111,7 @@ const buildArticleFilter = ({
   }
 
   if (includeCategory && categories.length > 0) {
-    filter.topic = { $in: categories };
+    filter.category = { $in: categories };
   }
   if (includeCategory && legacyCategories.length > 0) {
     filter.category = { $in: legacyCategories };
@@ -151,7 +154,7 @@ const topicFacetCounts = async (filter) => {
         topic: {
           $switch: {
             branches: [
-              ...TOPICS.filter((topic) => topic.id !== "other").map((topic) => ({
+              ...TOPICS.filter((topic) => topic.id !== "misc").map((topic) => ({
                 case: { $eq: ["$topic", topic.id] },
                 then: topic.id,
               })),
@@ -160,7 +163,7 @@ const topicFacetCounts = async (filter) => {
                 then: topic,
               })),
             ],
-            default: "other",
+            default: "misc",
           },
         },
       },
@@ -191,7 +194,35 @@ const topicFacetCounts = async (filter) => {
  * @param {Object} res - Express response object
  * @returns {Object} - { success, pagination, facets, data: [news articles] }
  */
-export const getTodayNews = asyncHandler(async (req, res, next) => {
+export const getTodayNews = asyncHandler((req, res) => sendFeed(req, res));
+
+/**
+ * The reader's personalised feed: today's news from the sources AND topics
+ * they picked. The same query parameters as getTodayNews narrow it further.
+ * GET /api/news/for-you
+ *
+ * Answers 409 when the reader has not picked yet, so the client can offer
+ * the picker instead of an empty feed.
+ */
+export const getForYouNews = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user.userId).select("preferences");
+  const { sources = [], topics = [] } = user?.preferences || {};
+  if (!sources.length || !topics.length) {
+    throw new AppError("Pick your sources and topics to see your feed", 409);
+  }
+
+  return sendFeed(req, res, {
+    sources: [...sources],
+    categories: topics.map((id) => TOPIC_LABELS[id]).filter(Boolean),
+  });
+});
+
+/**
+ * Shared by both feeds. `scope`, when given, bounds the result to those
+ * sources and categories: the card filters can narrow inside it, never
+ * widen past it.
+ */
+const sendFeed = async (req, res, scope = null) => {
   const { tag, tags, category, topic, source, search, limit = 10, skip = 0 } = req.query;
 
   // Validate and sanitize limit
@@ -204,29 +235,42 @@ export const getTodayNews = asyncHandler(async (req, res, next) => {
     "tags",
   );
   const requestedCategories = parseList(category);
-  const requestedTopics = parseList(topic);
+  const requestedTopics = parseList(topic).map(
+    (value) => TOPICS.find((item) => item.id === value || item.label === value)?.label || value,
+  );
+  const legacyCategoryAliases = {
+    Politics: "Politics & Governance",
+    Business: "Economy & Business",
+    Tech: "Science & Technology",
+    World: "World Affairs",
+  };
   const selectedCategories = validateList(
-    [...requestedTopics, ...requestedCategories.filter((value) => VALID_TOPIC_VALUES.includes(value))],
-    VALID_TOPIC_VALUES,
-    "topic",
-  )
-    .map((value) => TOPICS.find((item) => item.id === value || item.label === value).id);
-  const legacyCategories = validateList(
-    requestedCategories.filter((value) => !VALID_TOPIC_VALUES.includes(value)),
+    [...requestedTopics, ...requestedCategories].map(
+      (value) => legacyCategoryAliases[value] || value,
+    ),
     NEWS_CATEGORIES,
     "category",
   );
-  const selectedSources = validateList(
+  const requestedSources = validateList(
     parseList(source),
     VALID_SOURCES,
     "source",
   );
 
+  const withinScope = (selected, allowed) =>
+    selected.length ? selected.filter((value) => allowed.includes(value)) : allowed;
+  const categories = scope
+    ? withinScope(selectedCategories, scope.categories)
+    : selectedCategories;
+  const selectedSources = scope
+    ? withinScope(requestedSources, scope.sources)
+    : requestedSources;
+
   const filter = buildArticleFilter({
     search,
     tags: selectedTags,
-    categories: selectedCategories,
-    legacyCategories,
+    categories,
+    legacyCategories: [],
     sources: selectedSources,
   });
 
@@ -239,10 +283,22 @@ export const getTodayNews = asyncHandler(async (req, res, next) => {
     includeCategory: false,
   });
 
-  const [totalCount, news, byCategory, byLegacyCategory, bySource, byTag] = await Promise.all([
+  if (scope) {
+    // Set explicitly: buildArticleFilter skips empty lists, but a card filter
+    // outside the reader's picks must match nothing, not everything.
+    filter.category = { $in: categories };
+    filter.source = { $in: selectedSources };
+    facetFilter.category = { $in: scope.categories };
+    facetFilter.source = { $in: selectedSources };
+  }
+
+  const [totalCount, news, byCategory, bySource, byTag] = await Promise.all([
     News.countDocuments(filter),
-    News.find(filter).sort({ date: -1 }).limit(parsedLimit).skip(parsedSkip).exec(),
-    topicFacetCounts(facetFilter),
+    News.find(filter)
+      .sort({ date: -1 })
+      .limit(parsedLimit)
+      .skip(parsedSkip)
+      .exec(),
     facetCounts(facetFilter, "category"),
     facetCounts(facetFilter, "source"),
     facetCounts(facetFilter, "tags", true),
@@ -264,14 +320,9 @@ export const getTodayNews = asyncHandler(async (req, res, next) => {
     // does not reflow as filters change.
     facets: {
       byCategory: NEWS_CATEGORIES.reduce((acc, categoryName) => {
-        if (!Object.hasOwn(acc, categoryName)) {
-          acc[categoryName] = byLegacyCategory[categoryName] || 0;
-        }
+        acc[categoryName] = byCategory[categoryName] || 0;
         return acc;
-      }, TOPICS.reduce((acc, topicItem) => {
-        acc[topicItem.label] = byCategory[topicItem.id] || 0;
-        return acc;
-      }, {})),
+      }, {}),
       bySource: Object.fromEntries(
         VALID_SOURCES.map((s) => [s, bySource[s] || 0]),
       ),
@@ -279,7 +330,7 @@ export const getTodayNews = asyncHandler(async (req, res, next) => {
     },
     data: publicNews,
   });
-});
+};
 
 /**
  * Get a single news article by ID
@@ -317,6 +368,35 @@ export const getNewsByID = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * Answer a detailed request that hit an AI rate limit. The article goes back
+ * to NONE rather than FAILED, since nothing is wrong with it, and the reply
+ * says when capacity is expected back so the client can retry on its own.
+ */
+const respondRateLimited = async (res, id, retryAfterMs) => {
+  const available = await News.findByIdAndUpdate(
+    id,
+    {
+      $set: {
+        detailedStatus: "NONE",
+        detailedLockedAt: null,
+        lastError: RATE_LIMITED_MESSAGE,
+      },
+    },
+    { new: true, runValidators: true },
+  );
+  if (!available) throw new AppError("News article not found", 404);
+
+  const retryAfter = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : null;
+  if (retryAfter) res.set("Retry-After", String(Math.ceil(retryAfter / 1000)));
+  return res.status(429).json({
+    success: false,
+    message: "AI providers are busy right now. Please try again shortly.",
+    retryAfterMs: retryAfter,
+    data: available.getPublicNews(),
+  });
+};
+
+/**
  * Generate or return the cached detailed summary for an article.
  * POST /api/news/:id/detailed
  */
@@ -329,12 +409,41 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
     const article = await News.findOne({ _id: id, isPublished: true });
     if (!article) throw new AppError("News article not found", 404);
 
-    if (article.detailedStatus === "DONE" && article.detailedSummary) {
+    const hasValidatedFullSource =
+      article.detailSourceType === "FULL_TEXT" &&
+      Number(article.sourceWordCount) >= 120;
+
+    if (
+      article.detailedStatus === "DONE" &&
+      article.detailedSummary &&
+      hasValidatedFullSource
+    ) {
       return res.status(200).json({
         success: true,
         message: "Detailed summary retrieved from cache",
         data: article.getPublicNews(),
       });
+    }
+
+    // Discard summaries created before the full-source-only flow. They may
+    // have been generated from an RSS snippet or an unclean webpage extract.
+    if (article.detailedStatus === "DONE" && !hasValidatedFullSource) {
+      await News.updateOne(
+        { _id: id },
+        {
+          $set: { detailedStatus: "NONE", detailedLockedAt: null },
+          $unset: {
+            detailedSummary: 1,
+            detailedGeneratedAt: 1,
+            detailedConfidence: 1,
+            detailSourceType: 1,
+            sourceWordCount: 1,
+            sourceTier: 1,
+          },
+        },
+      );
+      article.detailedStatus = "NONE";
+      article.detailedSummary = null;
     }
 
     if (article.detailedStatus === "PENDING") {
@@ -396,7 +505,7 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
 
     let result;
     try {
-      result = await generateDetailedSummary(locked);
+      result = await generateDetailedSummary(locked, { priority: "interactive" });
     } catch (error) {
       console.error("Detailed summary generation failed:", {
         articleId: id,
@@ -404,23 +513,7 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
       });
 
       if (error.statusCode === 429) {
-        const available = await News.findByIdAndUpdate(
-          id,
-          {
-            $set: {
-              detailedStatus: "NONE",
-              detailedLockedAt: null,
-              lastError: "AI providers are temporarily rate-limited",
-            },
-          },
-          { new: true, runValidators: true },
-        );
-        if (!available) throw new AppError("News article not found", 404);
-        return res.status(429).json({
-          success: false,
-          message: "AI providers are temporarily rate-limited. Please try again shortly.",
-          data: available.getPublicNews(),
-        });
+        return respondRateLimited(res, id, error.retryAfterMs);
       }
 
       const failed = await News.findByIdAndUpdate(
@@ -447,6 +540,10 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
         message: "Detailed summary generation failed. Please try again.",
         data: failed.getPublicNews(),
       });
+    }
+
+    if (result.status === "RATE_LIMITED") {
+      return respondRateLimited(res, id, result.retryAfterMs);
     }
 
     // Normalise the result status so any unexpected value is treated as a
@@ -565,7 +662,7 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
  * @param {string[]} req.body.bulletPoints - Key bullet points (required, 3-10)
  * @param {string[]} req.body.tags - Tags (required, 1-3)
  * @param {string} [req.body.category] - Broad category (optional; defaults to
- *   "Other"). One of Politics, Business, Sports, Tech, World, Entertainment,
+ * "Misc"). One of the fifteen configured topics,
  *   Other
  * @param {string[]} req.body.subtopics - Subtopics (optional, max 5)
  * @param {string} req.body.url - Original article URL (optional)
@@ -603,7 +700,7 @@ export const createNews = asyncHandler(async (req, res, next) => {
   }
 
   // Validate category enum when supplied. Optional: an omitted category falls
-  // back to "Other" so manual creation does not require the caller to know the
+  // back to "Misc" so manual creation does not require the caller to know the
   // taxonomy.
   if (category !== undefined && !NEWS_CATEGORIES.includes(category)) {
     throw new AppError(

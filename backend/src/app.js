@@ -5,12 +5,11 @@ import { config } from "./config/env.js";
 import { corsMiddleware } from "./middleware/corsMiddleware.js";
 import { apiLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
-import testRoutes from "./routes/testRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import newsRoutes from "./routes/newsRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
-import aiRoutes from "./routes/aiRoutes.js";
-//
+import bookmarkRoutes from "./routes/bookmarkRoutes.js";
+import meRoutes from "./routes/meRoutes.js";
 
 const app = express();
 app.set("trust proxy", config.TRUST_PROXY);
@@ -44,11 +43,6 @@ app.get("/health", (req, res) => {
 
 // ====== ROUTES ======
 
-// Test routes
-if (!config.isProduction) {
-  app.use("/api", testRoutes);
-}
-
 // Auth routes
 app.use("/api/auth", authRoutes);
 
@@ -56,8 +50,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/admin", adminRoutes);
 
-// AI summarization routes
-app.use("/api/ai", aiRoutes);
+app.use("/api/bookmarks", bookmarkRoutes);
+app.use("/api/me", meRoutes);
 
 // API version and info
 app.get("/api/info", (req, res) => {

@@ -79,6 +79,8 @@ export const createAuthResponse = (user, token) => {
       id: user._id,
       name: user.name,
       email: user.email,
+      avatar: user.avatar || null,
+      preferences: user.publicPreferences(),
     },
   };
 };

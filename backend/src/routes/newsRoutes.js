@@ -3,6 +3,7 @@ import { protect } from "../middleware/authMiddleware.js";
 import { detailedLimiter } from "../middleware/rateLimiter.js";
 import {
   getTodayNews,
+  getForYouNews,
   getNewsByID,
   createNews,
   getNewsByTag,
@@ -37,6 +38,13 @@ const router = express.Router();
  */
 router.get("/today", getTodayNews);
 router.get("/", getTodayNews);
+
+/**
+ * GET /api/news/for-you
+ * Today's news from the reader's picked sources and topics. Accepts the same
+ * query parameters as /today; answers 409 until the reader has picked.
+ */
+router.get("/for-you", protect, getForYouNews);
 
 /**
  * GET /api/news/search?q=...

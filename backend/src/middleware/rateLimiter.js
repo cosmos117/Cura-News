@@ -65,18 +65,6 @@ export const authLimiter = createLimiter({
 });
 
 /**
- * Limiter for AI endpoints. Each call is a billed provider request, so this one
- * can be disabled locally via RATE_LIMIT_AI=false while iterating.
- */
-export const aiLimiter = createLimiter({
-  windowMs: 60 * 1000,
-  max: 15,
-  message:
-    "AI request limit reached. Please wait before requesting more summaries.",
-  enabled: process.env.RATE_LIMIT_AI !== "false",
-});
-
-/**
  * Limiter for the daily news pipeline. Each run issues dozens of upstream
  * requests; the pipeline also holds an in-flight lock as a second line of
  * defence.

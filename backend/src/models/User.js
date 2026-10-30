@@ -1,5 +1,8 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import { SOURCE_NAMES } from "../config/feeds.js";
+import { TOPIC_IDS } from "../config/topics.js";
+
 
 /**
  * User Schema
@@ -19,26 +22,61 @@ const userSchema = new mongoose.Schema(
       required: [true, "Please provide an email"],
       unique: [true, "Email already exists"],
       lowercase: true,
+      // TLDs of any length: Google accounts can use domains like .info or .design.
       match: [
-        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
+        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,})+$/,
         "Please provide a valid email address",
       ],
     },
+    // Google-only accounts have no password; they sign in with an ID token.
     password: {
       type: String,
-      required: [true, "Please provide a password"],
+      required: [
+        function () {
+          return !this.googleId;
+        },
+        "Please provide a password",
+      ],
       minlength: [8, "Password must be at least 8 characters"],
       select: false, // Don't include password in queries by default
+    },
+    // Google's stable account ID (the ID token's `sub` claim).
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    avatar: {
+      type: String,
+      default: null,
     },
     isActive: {
       type: Boolean,
       default: true,
+    },
+    // The "For You" feed: papers and topics (ids from config/topics.js) the
+    // reader picked. onboardedAt marks the picker as finished or skipped.
+    preferences: {
+      sources: { type: [{ type: String, enum: SOURCE_NAMES }], default: [] },
+      topics: { type: [{ type: String, enum: TOPIC_IDS }], default: [] },
+      onboardedAt: { type: Date, default: null },
     },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt
   },
 );
+
+/** The reader's feed picks, as sent to the client. */
+userSchema.methods.publicPreferences = function () {
+  const preferences = this.preferences || {};
+  return {
+    sources: [...(preferences.sources || [])],
+    topics: [...(preferences.topics || [])],
+    onboardedAt: preferences.onboardedAt || null,
+  };
+};
+
 
 /**
  * Pre-save hook: Hash password before saving to database

@@ -27,6 +27,10 @@ export const config = {
   JWT_SECRET: getEnv("JWT_SECRET", "default_secret_change_in_production"),
   JWT_EXPIRE: getEnv("JWT_EXPIRE", "7d"),
 
+  // Google sign-in. The OAuth client ID that issued the ID token; tokens for
+  // any other audience are rejected. Empty disables POST /api/auth/google.
+  GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", ""),
+
   // AI providers. These are the only providers any code path calls, via
   // generateStructured (primary + fallback).
   GEMINI_API_KEY: getEnv("GEMINI_API_KEY", ""),
@@ -39,6 +43,16 @@ export const config = {
   GROQ_MODEL: getEnv("GROQ_MODEL", "openai/gpt-oss-120b"),
   AI_PROVIDER: getEnv("AI_PROVIDER", "gemini"),
 
+  // AI pacing (see aiService.js). Requests per minute each provider allows;
+  // the defaults match the free tiers. Raise them on a paid plan.
+  GEMINI_RPM: parseInt(getEnv("GEMINI_RPM", "10"), 10),
+  GROQ_RPM: parseInt(getEnv("GROQ_RPM", "30"), 10),
+  // Capacity background jobs (ingest, the detailed batch) must leave free so
+  // a reader's request never queues behind them: tokens per minute (about one
+  // detailed summary) and requests per day. Only Groq reports these limits.
+  AI_INTERACTIVE_TOKEN_RESERVE: parseInt(getEnv("AI_INTERACTIVE_TOKEN_RESERVE", "4000"), 10),
+  AI_INTERACTIVE_REQUEST_RESERVE: parseInt(getEnv("AI_INTERACTIVE_REQUEST_RESERVE", "50"), 10),
+
   // CORS
   // Comma-separated list of allowed origins. Default matches the Vite dev
   // server port declared in frontend/vite.config.js.
@@ -49,7 +63,10 @@ export const config = {
   // Detailed summaries
   DETAILED_TOP_N: parseInt(getEnv("DETAILED_TOP_N", "30"), 10),
   MIN_TEXT_CHARS: parseInt(getEnv("MIN_TEXT_CHARS", "800"), 10),
-  INPUT_MAX_CHARS: parseInt(getEnv("INPUT_MAX_CHARS", "30000"), 10),
+  // Article text sent for a detailed summary. 12,000 chars (~3,000 tokens)
+  // keeps the whole request inside Groq's free-tier 8,000 tokens per minute;
+  // 30,000 made long articles fail there as "request too large".
+  INPUT_MAX_CHARS: parseInt(getEnv("INPUT_MAX_CHARS", "12000"), 10),
   AI_DAILY_LIMIT: parseInt(getEnv("AI_DAILY_LIMIT", "100"), 10),
   AI_DELAY_MS: parseInt(getEnv("AI_DELAY_MS", "500"), 10),
   FETCH_TIMEOUT_MS: parseInt(getEnv("FETCH_TIMEOUT_MS", "10000"), 10),
@@ -61,6 +78,8 @@ export const config = {
   isTest: getEnv("NODE_ENV", "development") === "test",
   // Ingestion scheduler
   INGEST_INTERVAL_MINUTES: parseInt(getEnv("INGEST_INTERVAL_MINUTES", "15"), 10),
+  // Indian Standard Time offset in minutes (UTC+5:30)
+  IST_OFFSET_MINUTES: parseInt(getEnv("IST_OFFSET_MINUTES", "330"), 10),
 };
 
 // Validate critical env vars in production

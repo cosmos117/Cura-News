@@ -37,7 +37,7 @@ const matches = (text, keyword) => new RegExp(`\\b${keyword.replace(/[.*+?^${}()
 
 export const classifyByRules = (article) => {
   const text = words(`${article.headline} ${article.summary}`);
-  const scored = TOPICS.filter((topic) => topic.id !== "other").map((topic) => ({
+  const scored = TOPICS.filter((topic) => topic.id !== "misc").map((topic) => ({
     topic,
     score: topic.includeKeywords.reduce((score, keyword) => score + (matches(text, keyword) ? 1 : 0), 0) -
       topic.excludeKeywords.reduce((score, keyword) => score + (matches(text, keyword) ? 2 : 0), 0),
@@ -60,7 +60,7 @@ export const classifyByRules = (article) => {
 };
 
 const fallback = () => ({
-  topic: "other",
+  topic: "misc",
   secondaryTopics: [],
   topicSource: "AI",
   topicConfidence: "low",
@@ -87,7 +87,11 @@ export async function classifyArticles(articles) {
       });
       if (!Array.isArray(payload)) payload = null;
     } catch (error) {
-      if (attempt === 2) console.warn(`Topic AI classification failed: ${error.message}`);
+      // A repair retry cannot help with a rate limit; fall back right away.
+      if (error.statusCode === 429 || attempt === 2) {
+        console.warn(`Topic AI classification failed: ${error.message}`);
+        break;
+      }
     }
   }
   for (const item of undecided) {
@@ -103,4 +107,4 @@ export async function classifyArticles(articles) {
   return articles.map((article) => ({ ...article, ...results.get(article.url) }));
 }
 
-export const topicLabel = (id) => topicById(id)?.label || "Other";
+export const topicLabel = (id) => topicById(id)?.label || "Misc";

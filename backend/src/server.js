@@ -7,6 +7,7 @@ import app from "./app.js";
 import { connectDB, disconnectDB } from "./config/database.js";
 import { config } from "./config/env.js";
 import News from "./models/News.js";
+import { RATE_LIMITED_MESSAGE } from "./services/aiService.js";
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
 
 // Validate environment variables
@@ -34,6 +35,12 @@ const start = async () => {
     // autoIndex runs in the background, so without this the first searches
     // after a restart (or any schema change) can 500.
     await News.init();
+    // Rate limits are transient, but older builds saved them as FAILED, which
+    // the reader UI treats as final. Make those articles retryable again.
+    await News.updateMany(
+      { detailedStatus: "FAILED", lastError: RATE_LIMITED_MESSAGE },
+      { $set: { detailedStatus: "NONE" } },
+    );
   } catch (error) {
     console.error("❌ Failed to start server:", error.message);
     process.exit(1);

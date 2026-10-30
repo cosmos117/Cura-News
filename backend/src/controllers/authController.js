@@ -1,4 +1,7 @@
+import axios from "axios";
+import { OAuth2Client } from "google-auth-library";
 import User from "../models/User.js";
+import { config } from "../config/env.js";
 import { AppError, asyncHandler } from "../middleware/errorHandler.js";
 import { generateToken, createAuthResponse } from "../services/jwtService.js";
 
@@ -37,7 +40,7 @@ export const register = asyncHandler(async (req, res, next) => {
   }
 
   // Email format check (basic)
-  const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
+  const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,})+$/;
   if (!emailRegex.test(email)) {
     throw new AppError("Please provide a valid email address", 400);
   }
@@ -104,6 +107,12 @@ export const login = asyncHandler(async (req, res, next) => {
     throw new AppError("Account has been deactivated", 403);
   }
 
+  // Google-only accounts have no password. Same message as a wrong password,
+  // so the response does not reveal how an account was created.
+  if (!user.password) {
+    throw new AppError("Invalid email or password", 401);
+  }
+
   // Compare passwords
   const isPasswordValid = await user.matchPassword(password);
 
@@ -124,6 +133,97 @@ export const login = asyncHandler(async (req, res, next) => {
   });
 });
 
+const googleClient = new OAuth2Client();
+const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
+
+/** A display name that fits the User model's 2-50 character limits. */
+const nameFromGoogle = (payload) => {
+  const candidates = [payload.name, payload.given_name, payload.email?.split("@")[0]];
+  const name = candidates.map((value) => value?.trim()).find((value) => value?.length >= 2);
+  return (name || "Reader").slice(0, 50);
+};
+
+/**
+ * Sign in (or sign up) with Google
+ * POST /api/auth/google
+ *
+ * The frontend's own Google button opens Google's OAuth popup and receives an
+ * access token. Before anything is trusted, Google's tokeninfo endpoint must
+ * confirm the token is live and was issued to OUR client ID; otherwise a
+ * token granted to any other app could be replayed here to sign in as its
+ * user. The profile (ID, email, name, picture) then comes from userinfo.
+ *
+ * The user is matched by Google ID first, then by verified email, which links
+ * Google to an existing password account.
+ *
+ * @param {Object} req.body
+ * @param {string} req.body.accessToken - Google OAuth access token
+ * @returns {Object} - { success, token, user }
+ */
+export const googleLogin = asyncHandler(async (req, res, next) => {
+  if (!config.GOOGLE_CLIENT_ID) {
+    throw new AppError("Google sign-in is not configured", 503);
+  }
+
+  const { accessToken } = req.body;
+  if (!accessToken || typeof accessToken !== "string") {
+    throw new AppError("Missing Google access token", 400);
+  }
+
+  let payload;
+  try {
+    const tokenInfo = await googleClient.getTokenInfo(accessToken);
+    if (tokenInfo.aud !== config.GOOGLE_CLIENT_ID) {
+      throw new Error("Token was issued to a different client");
+    }
+    const { data } = await axios.get(GOOGLE_USERINFO_URL, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000,
+    });
+    payload = data;
+  } catch {
+    throw new AppError("Invalid Google credential", 401);
+  }
+
+  // Only a verified email may link to (and so take over) an existing account.
+  if (!payload?.sub || !payload.email || !payload.email_verified) {
+    throw new AppError("Your Google account email is not verified", 401);
+  }
+
+  const email = payload.email.toLowerCase();
+  let user = await User.findOne({ googleId: payload.sub });
+  let created = false;
+
+  if (!user) {
+    user = await User.findOne({ email });
+    if (user) {
+      user.googleId = payload.sub;
+      if (!user.avatar && payload.picture) user.avatar = payload.picture;
+      await user.save();
+    } else {
+      user = await User.create({
+        name: nameFromGoogle(payload),
+        email,
+        googleId: payload.sub,
+        avatar: payload.picture || null,
+      });
+      created = true;
+    }
+  }
+
+  if (!user.isActive) {
+    throw new AppError("Account has been deactivated", 403);
+  }
+
+
+  const token = generateToken(user._id.toString());
+
+  res.status(created ? 201 : 200).json({
+    ...createAuthResponse(user, token),
+    message: created ? "User registered successfully" : "Login successful",
+  });
+});
+
 /**
  * Get current logged-in user
  * GET /api/auth/me
@@ -134,7 +234,8 @@ export const login = asyncHandler(async (req, res, next) => {
  * @returns {Object} - { success, user }
  */
 export const getCurrentUser = asyncHandler(async (req, res, next) => {
-  const user = await User.findById(req.user.userId);
+  // +password only to report whether one is set; it is never sent.
+  const user = await User.findById(req.user.userId).select("+password");
 
   if (!user) {
     throw new AppError("User not found", 404);
@@ -146,8 +247,13 @@ export const getCurrentUser = asyncHandler(async (req, res, next) => {
       id: user._id,
       name: user.name,
       email: user.email,
+      avatar: user.avatar || null,
       isActive: user.isActive,
       createdAt: user.createdAt,
+      preferences: user.publicPreferences(),
+      // How the account signs in, so Settings asks for the right confirmation.
+      hasPassword: Boolean(user.password),
+      hasGoogle: Boolean(user.googleId),
     },
   });
 });
