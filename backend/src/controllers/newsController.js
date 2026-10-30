@@ -927,14 +927,36 @@ export const searchNews = asyncHandler(async (req, res, next) => {
  * @returns {Object} - { success, data: stats }
  */
 export const getNewsStats = asyncHandler(async (req, res, next) => {
-  const totalNews = await News.countDocuments({ isPublished: true });
-  const todayNews = await News.countDocuments({
+  const todayFilter = {
     isPublished: true,
     $or: [
       { publishedDayKey: istDayKey() },
       { publishedDayKey: { $exists: false }, publishedAt: istDayRange() },
     ],
-  });
+  };
+  const totalNews = await News.countDocuments({ isPublished: true });
+  const todayNews = await News.countDocuments(todayFilter);
+
+  // Today's detailed summaries: how many readers have opened, and which
+  // free-tier models wrote them.
+  const detailedRows = await News.aggregate([
+    { $match: todayFilter },
+    {
+      $group: {
+        _id: { status: "$detailedStatus", model: "$modelUsed" },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+  const detailed = { byStatus: {}, byModel: {} };
+  for (const { _id, count } of detailedRows) {
+    const status = _id.status || "NONE";
+    detailed.byStatus[status] = (detailed.byStatus[status] || 0) + count;
+    if (status === "DONE") {
+      const model = _id.model || "unknown";
+      detailed.byModel[model] = (detailed.byModel[model] || 0) + count;
+    }
+  }
 
   const sourceStats = await News.aggregate([
     { $match: { isPublished: true } },
@@ -985,6 +1007,7 @@ export const getNewsStats = asyncHandler(async (req, res, next) => {
         acc[category] = row ? row.count : 0;
         return acc;
       }, {}),
+      detailed,
     },
   });
 });

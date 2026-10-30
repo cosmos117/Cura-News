@@ -1042,6 +1042,8 @@ ${Array(5).fill(sentence).join(" ")}`;
     assert.equal(res.data.data.totalArticles, 1);
     assert.equal(res.data.data.bySource["The Hindu"], 1);
     assert.equal(res.data.data.byTag.Polity, 1);
+    assert.equal(typeof res.data.data.detailed.byStatus, "object");
+    assert.equal(typeof res.data.data.detailed.byModel, "object");
   });
 
   await check("GET /news/fetch-daily is removed", async () => {
