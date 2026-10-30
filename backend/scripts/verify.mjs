@@ -100,6 +100,10 @@ async function main() {
   process.env.GROQ_API_KEY = "test-groq-key";
   process.env.GEMINI_RPM = "10";
   process.env.GROQ_RPM = "30";
+  // Page fetching is off for the whole run, so the background pipeline started
+  // by the admin ingest test never touches the real sites. The tests that need
+  // it switch it on for their own duration.
+  process.env.SUMMARY_PAGE_FETCH = "false";
 
   const { connectDB, disconnectDB } = await import("../src/config/database.js");
   await connectDB();
@@ -166,7 +170,7 @@ async function main() {
   });
 
   await check("article extractor proceeds when robots returns 403, timeout, or null", async () => {
-    const { extractArticleText } = await import("../src/services/articleTextExtractor.js");
+    const { extractArticleText, resetRobotsCache } = await import("../src/services/articleTextExtractor.js");
     const originalGet = axios.get;
     const html = `<html><body><article>${"Readable article text ".repeat(100)}</article></body></html>`;
     try {
@@ -175,6 +179,8 @@ async function main() {
         new Error("timeout"),
         null,
       ]) {
+        // robots.txt is cached per site, so each case starts with a clean cache.
+        resetRobotsCache();
         let call = 0;
         axios.get = async () => {
           call += 1;
@@ -345,6 +351,275 @@ async function main() {
       ["https://a.vercel.app", "http://localhost:3000", "https://b.example.com"],
     );
     assert.deepEqual(parseAllowedOrigins(""), []);
+  });
+
+  // ---------- short summaries (no AI) ----------
+  const { buildShortSummary, pickBlurb } = await import("../src/services/content/shortSummary.js");
+  const wordsIn = (value) => value.split(/\s+/).filter(Boolean).length;
+  const ARTICLE = [
+    "NEW DELHI: The Reserve Bank of India kept the repo rate unchanged at 6.5 per cent on Friday, citing sticky food prices and a fragile global outlook.",
+    "Governor Sanjay Malhotra said inflation was expected to average 4.4 per cent this fiscal year, down from an earlier estimate of 4.8 per cent.",
+    "The central bank also raised its growth forecast to 7 per cent, helped by strong rural demand and Rs. 1.2 lakh crore of government capital spending.",
+    "Banks welcomed the pause. \"We expected the status quo,\" said an analyst at a large brokerage.",
+    "Markets reacted calmly, with the Sensex closing 0.4 per cent higher at 82,150 points by the end of the day.",
+    "View this post on Instagram A post shared by RBI (@rbi)",
+    "Also read: What the rate pause means for home loans",
+    "He said the central bank would watch incoming data closely before the next meeting.",
+    "The next policy review is scheduled for December, when officials will weigh new inflation figures.",
+  ];
+  const HEADLINE = "RBI holds repo rate steady";
+
+  await check("short summary: lead sentences and key facts when the paper gives no description", async () => {
+    const out = buildShortSummary({ headline: HEADLINE, source: "Indian Express", pageText: ARTICLE.join("\n") });
+    assert.equal(out.method, "extractive");
+    assert.match(out.summary, /^The Reserve Bank of India kept the repo rate/, "dateline is stripped");
+    assert.ok(wordsIn(out.summary) <= 50, `summary has ${wordsIn(out.summary)} words`);
+    assert.ok(out.keyFacts.length >= 1 && out.keyFacts.length <= 3);
+    for (const fact of out.keyFacts) {
+      assert.ok(wordsIn(fact) <= 26, `fact too long: ${fact}`);
+      assert.ok(!out.summary.includes(fact), "a fact must not repeat the summary");
+      assert.ok(!/^(?:He|She|They|It|This|But|And)\b/.test(fact), `fact needs its context: ${fact}`);
+    }
+    const everything = [out.summary, ...out.keyFacts].join(" ");
+    assert.doesNotMatch(everything, /Instagram|Also read|@rbi/i, "junk lines never get through");
+    assert.ok(
+      out.keyFacts.some((fact) => fact.includes("Rs. 1.2 lakh crore")) || !everything.includes("Rs."),
+      "Rs. does not split a sentence",
+    );
+  });
+
+  await check("short summary: junk or cut-off publisher descriptions are rejected", async () => {
+    const junk = [
+      "I agree.",
+      "View this post on Instagram A post shared by Mumbai Indians (@mumbaiindians)",
+      "&quot;You are a SICK guy! Reuters is terrible, by the way.",
+      "TOI Correspondent from Washington: Four days before a midterm election that could leave him politically out of shape, US President Donald Trump decided to",
+      "The talks in Geneva ended without a deal and negotiators said they would return after the holidays...",
+      "“We will not accept this decision and will challenge it in court, the union leader said on Friday",
+      HEADLINE,
+      "",
+    ];
+    for (const text of junk) assert.equal(pickBlurb(text, HEADLINE), null, `should reject: ${text}`);
+
+    const good = pickBlurb(
+      "Chandrababu Naidu’s rapid, coordinated response minimizes cyclone damage, restores services across coastal districts",
+      "Naidu cyclone response",
+    );
+    assert.equal(good, "Chandrababu Naidu’s rapid, coordinated response minimizes cyclone damage, restores services across coastal districts.");
+
+    const long = pickBlurb(
+      "Heavy rain flooded low-lying areas of the city on Friday evening and disrupted traffic on several major roads for hours. " +
+        "Officials said pumps were deployed in the worst affected neighbourhoods and teams worked through the night to clear water. " +
+        "The weather office has forecast more showers over the weekend and asked residents to avoid unnecessary travel.",
+      "City rain",
+    );
+    assert.ok(wordsIn(long) <= 45 && /[.]$/.test(long), `trimmed to whole sentences: ${long}`);
+  });
+
+  await check("short summary: page description, then RSS, then the lead, then the headline", async () => {
+    const pageText = ARTICLE.join("\n");
+    const og = "The central bank held rates and signalled caution on inflation while raising its growth outlook for the year";
+    const rss = "The Reserve Bank kept the policy rate unchanged, saying food prices remain a concern for households across the country.";
+    const base = { headline: HEADLINE, source: "The Hindu", pageText };
+
+    assert.equal(buildShortSummary({ ...base, pageDescriptions: [og], rssDescription: rss }).method, "publisher-page");
+    // TOI's first tag can be junk while a later one is fine.
+    const second = buildShortSummary({ ...base, pageDescriptions: ["View this post on Instagram A post shared by RBI", og] });
+    assert.equal(second.method, "publisher-page");
+    assert.match(second.summary, /^The central bank held rates/);
+    assert.equal(buildShortSummary({ ...base, pageDescriptions: ["I agree."], rssDescription: rss }).method, "publisher-rss");
+    assert.equal(buildShortSummary(base).method, "extractive");
+
+    const bare = buildShortSummary({ headline: "Budget talks begin", source: "The Hindu" });
+    assert.equal(bare.method, "headline");
+    assert.ok(bare.summary.length >= 50, "meets the News.summary minimum");
+    assert.deepEqual(bare.keyFacts, []);
+  });
+
+  const { extractArticleText, resetRobotsCache } = await import("../src/services/articleTextExtractor.js");
+  const originalGetForSummaries = axios.get;
+  const pageHtml = ({ tags = "", paragraphs = [] }) =>
+    `<!doctype html><html><head><title>Story</title>${tags}</head><body><header><nav>Menu</nav></header>` +
+    `<article><h1>Story</h1>${paragraphs.map((text) => `<p>${text}</p>`).join("")}</article><footer>Footer links</footer></body></html>`;
+  const CLEAN_PARAGRAPHS = ARTICLE.filter((line) => !/Instagram|Also read/.test(line)).map((line) => line.replace(/^NEW DELHI: /, ""));
+
+  await check("page fetch keeps the description tags and paragraphs, and reads robots.txt once per site", async () => {
+    resetRobotsCache();
+    const requests = [];
+    axios.get = async (url) => {
+      if (!String(url).includes("pages.example")) return originalGetForSummaries(url);
+      requests.push(String(url));
+      if (String(url).endsWith("/robots.txt")) return { status: 200, data: "User-agent: *\nAllow: /\n" };
+      if (url.includes("/thin")) return { data: pageHtml({ tags: '<meta property="og:description" content="Only a tag">', paragraphs: ["Short."] }) };
+      if (url.includes("/down")) throw new Error("connect ECONNREFUSED");
+      return {
+        data: pageHtml({
+          tags:
+            '<meta property="og:description" content="First tag description for the story about rates and prices">' +
+            '<meta name="twitter:description" content="Second tag description for the story about rates and prices">' +
+            '<meta name="description" content="Third tag description for the story about rates and prices">',
+          paragraphs: CLEAN_PARAGRAPHS,
+        }),
+      };
+    };
+    try {
+      const page = await extractArticleText("https://pages.example/a", { minChars: 300, paragraphs: true });
+      assert.equal(page.available, true);
+      assert.deepEqual(page.descriptions.map((d) => d.split(" ")[0]), ["First", "Second", "Third"]);
+      assert.ok(page.paragraphs.length >= 5, `paragraphs: ${page.paragraphs.length}`);
+
+      const thin = await extractArticleText("https://pages.example/thin", { minChars: 300 });
+      assert.equal(thin.available, false);
+      assert.deepEqual(thin.descriptions, ["Only a tag"], "tags survive a thin page");
+      assert.ok(!thin.failed);
+
+      const down = await extractArticleText("https://pages.example/down", { minChars: 300 });
+      assert.equal(down.available, false);
+      assert.equal(down.failed, true);
+
+      assert.equal(requests.filter((url) => url.endsWith("/robots.txt")).length, 1, "robots.txt fetched once");
+    } finally {
+      axios.get = originalGetForSummaries;
+    }
+  });
+
+  await check("ingest builds summaries from pages with no AI calls, spaces requests and skips a failing site", async () => {
+    const { config: pipelineConfig } = await import("../src/config/env.js");
+    const saved = { fetch: pipelineConfig.SUMMARY_PAGE_FETCH, delay: pipelineConfig.PAGE_FETCH_DELAY_MS };
+    pipelineConfig.SUMMARY_PAGE_FETCH = true;
+    pipelineConfig.PAGE_FETCH_DELAY_MS = 0;
+    resetRobotsCache();
+    stubAi({});
+    newsProcessor.logger.stats.pageFetch = {};
+    newsProcessor.logger.stats.summaryMethods = {};
+    const downRequests = [];
+    axios.get = async (url) => {
+      const text = String(url);
+      if (!text.includes("tests.example") && !text.includes("down.example")) return originalGetForSummaries(url);
+      if (text.endsWith("/robots.txt")) return { status: 404, data: "" };
+      if (text.includes("down.example")) {
+        downRequests.push(text);
+        throw new Error("connect ETIMEDOUT");
+      }
+      if (text.includes("with-tag")) {
+        return {
+          data: pageHtml({
+            tags: '<meta property="og:description" content="Reserve Bank holds rates steady as inflation cools and the growth forecast is raised to seven per cent">',
+            paragraphs: CLEAN_PARAGRAPHS,
+          }),
+        };
+      }
+      return { data: pageHtml({ paragraphs: CLEAN_PARAGRAPHS }) };
+    };
+    const make = (url, extra = {}) => ({
+      source: "Test Paper",
+      headline: HEADLINE,
+      summary: `${HEADLINE}. Read the original report at Test Paper.`,
+      rssDescription: "",
+      url,
+      ...extra,
+    });
+    try {
+      const articles = [
+        make("https://tests.example/plain"),
+        make("https://tests.example/with-tag"),
+        ...Array.from({ length: 8 }, (_, i) => make(`https://down.example/story-${i}`)),
+      ];
+      const done = await newsProcessor._summarizeArticles(articles, async () => {});
+
+      assert.equal(done[0].summaryMethod, "extractive");
+      assert.ok(done[0].keyFacts.length >= 1);
+      assert.ok(done[0].sourceWordCount > 50);
+      assert.equal(done[0].promptVersion, null);
+      assert.equal(done[1].summaryMethod, "publisher-page");
+      assert.match(done[1].summary, /^Reserve Bank holds rates steady/);
+      assert.equal(aiCalls.length, 0, "no AI call is made for short summaries");
+
+      // The site that keeps failing is tried 5 times, then skipped.
+      assert.equal(downRequests.length, 5);
+      for (const result of done.slice(2)) {
+        assert.equal(result.summaryMethod, "headline");
+        assert.ok(result.summary.length >= 50);
+      }
+      const stats = newsProcessor.logger.stats;
+      assert.equal(stats.pageFetch["Test Paper"].ok, 2);
+      assert.equal(stats.pageFetch["Test Paper"].failed, 5);
+      assert.equal(stats.pageFetch["Test Paper"].skipped, 3);
+      assert.equal(stats.summaryMethods.headline, 8);
+
+      // The kill switch: no page requests at all, RSS description or headline only.
+      pipelineConfig.SUMMARY_PAGE_FETCH = false;
+      let pageRequests = 0;
+      axios.get = async (url) => {
+        if (String(url).includes("tests.example")) pageRequests += 1;
+        return originalGetForSummaries(url);
+      };
+      const offline = await newsProcessor._summarizeArticles(
+        [
+          make("https://tests.example/off-1", {
+            rssDescription: "The Reserve Bank kept the policy rate unchanged, saying food prices remain a concern for households.",
+          }),
+          make("https://tests.example/off-2"),
+        ],
+        async () => {},
+      );
+      assert.equal(pageRequests, 0);
+      assert.equal(offline[0].summaryMethod, "publisher-rss");
+      assert.equal(offline[1].summaryMethod, "headline");
+    } finally {
+      axios.get = originalGetForSummaries;
+      pipelineConfig.SUMMARY_PAGE_FETCH = saved.fetch;
+      pipelineConfig.PAGE_FETCH_DELAY_MS = saved.delay;
+      unstubAi();
+    }
+  });
+
+  await check("page-based summaries pass News validation and are stored with their method", async () => {
+    const { config: pipelineConfig } = await import("../src/config/env.js");
+    const saved = { fetch: pipelineConfig.SUMMARY_PAGE_FETCH, delay: pipelineConfig.PAGE_FETCH_DELAY_MS };
+    pipelineConfig.SUMMARY_PAGE_FETCH = true;
+    pipelineConfig.PAGE_FETCH_DELAY_MS = 0;
+    resetRobotsCache();
+    stubAi({});
+    const url = "https://tests.example/store-1";
+    axios.get = async (target) => {
+      if (!String(target).includes("tests.example")) return originalGetForSummaries(target);
+      if (String(target).endsWith("/robots.txt")) return { status: 404, data: "" };
+      return { data: pageHtml({ paragraphs: CLEAN_PARAGRAPHS }) };
+    };
+    try {
+      const [item] = await newsProcessor._summarizeArticles(
+        [
+          {
+            source: "The Hindu",
+            headline: HEADLINE,
+            summary: `${HEADLINE}. Read the original report at The Hindu.`,
+            rssDescription: "",
+            url,
+            feedCategory: "Business",
+            publishedAt: new Date(),
+          },
+        ],
+        async () => {},
+      );
+      const before = newsProcessor.logger.stats.stored;
+      const failedBefore = newsProcessor.logger.stats.failed;
+      await newsProcessor._storeArticles([item]);
+      assert.equal(newsProcessor.logger.stats.failed, failedBefore, "News validation rejected the article");
+      assert.equal(newsProcessor.logger.stats.stored, before + 1);
+
+      const stored = await News.findOne({ url }).lean();
+      assert.equal(stored.summaryMethod, "extractive");
+      assert.equal(stored.modelUsed, "rule-based");
+      assert.ok(stored.summary.length >= 50 && stored.keyFacts.length >= 1);
+      assert.deepEqual(stored.bulletPoints, stored.keyFacts);
+    } finally {
+      await News.deleteMany({ url });
+      axios.get = originalGetForSummaries;
+      pipelineConfig.SUMMARY_PAGE_FETCH = saved.fetch;
+      pipelineConfig.PAGE_FETCH_DELAY_MS = saved.delay;
+      unstubAi();
+    }
   });
 
   // ---------- config / env ----------

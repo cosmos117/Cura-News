@@ -81,6 +81,12 @@ const newsSchema = new mongoose.Schema(
     modelUsed: {
       type: String,
     },
+    // How the short summary was written: the page's own description, the RSS
+    // description, sentences taken from the article, or just the headline.
+    summaryMethod: {
+      type: String,
+      enum: ["publisher-page", "publisher-rss", "extractive", "headline"],
+    },
     headline: {
       type: String,
       required: [true, "Please provide a headline"],

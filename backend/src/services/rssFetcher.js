@@ -35,6 +35,9 @@ const normalize = (item, feed) => {
   return {
     headline,
     summary,
+    // The feed's own description, empty when the item has none. `summary` falls
+    // back to a filler line, which must not be mistaken for a publisher blurb.
+    rssDescription: feedText,
     source: feed.source,
     sourceId: feed.sourceId,
     feedId: feed.feedId,

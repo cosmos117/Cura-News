@@ -9,6 +9,23 @@ const ABBREVIATIONS = new Set([
   "ms.",
   "no.",
   "etc.",
+  "rs.",
+  "st.",
+  "jr.",
+  "sr.",
+  "vs.",
+  "prof.",
+  "govt.",
+  "ltd.",
+  "inc.",
+  "co.",
+  "mt.",
+  "dept.",
+  "gen.",
+  "col.",
+  "capt.",
+  "lt.",
+  "sen.",
 ]);
 
 export const wordCount = (value) => value.split(/\s+/).filter(Boolean).length;
@@ -44,7 +61,7 @@ const isProtectedPeriod = (text, index) => {
   return false;
 };
 
-const splitSentences = (text) => {
+export const splitSentences = (text) => {
   const sentences = [];
   let start = 0;
 

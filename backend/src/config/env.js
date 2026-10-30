@@ -69,6 +69,11 @@ export const config = {
   INPUT_MAX_CHARS: parseInt(getEnv("INPUT_MAX_CHARS", "12000"), 10),
   AI_DAILY_LIMIT: parseInt(getEnv("AI_DAILY_LIMIT", "100"), 10),
   AI_DELAY_MS: parseInt(getEnv("AI_DELAY_MS", "500"), 10),
+  // Short summaries are built from the article page (see content/shortSummary.js).
+  // SUMMARY_PAGE_FETCH=false skips the page fetch and uses RSS descriptions and
+  // headlines only. PAGE_FETCH_DELAY_MS spaces the requests out politely.
+  SUMMARY_PAGE_FETCH: getEnv("SUMMARY_PAGE_FETCH", "true") !== "false",
+  PAGE_FETCH_DELAY_MS: parseInt(getEnv("PAGE_FETCH_DELAY_MS", "300"), 10),
   FETCH_TIMEOUT_MS: parseInt(getEnv("FETCH_TIMEOUT_MS", "10000"), 10),
   MIN_ARTICLES_BEFORE_CLEANUP: parseInt(getEnv("MIN_ARTICLES_BEFORE_CLEANUP", "5"), 10),
 

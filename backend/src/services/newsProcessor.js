@@ -2,9 +2,13 @@
  * News Processor Service
  * Orchestrates the complete news processing pipeline:
  * 1. Fetch articles from RSS feeds
- * 2. Create a rule-based short summary
+ * 2. Build a short summary and key facts from the publisher's own text
+ *    (page description, RSS description, or the article's lead sentences)
  * 3. Store in MongoDB
  * 4. Handle failures and deduplication
+ *
+ * No AI is used for short summaries; the AI quota is kept for detailed
+ * summaries and the occasional ambiguous topic.
  */
 
 import News from "../models/News.js";
@@ -13,23 +17,20 @@ import { resolveCategory } from "../utils/category.js";
 import { istDayKey, istDayRange } from "../utils/date.js";
 import { generateTopDetailedSummaries } from "./detailedSummaryService.js";
 import { classifyArticles } from "./topicClassifier.js";
-import { generateArticleContent } from "./content/contentGenerator.js";
+import { buildShortSummary } from "./content/shortSummary.js";
+import { extractArticleText } from "./articleTextExtractor.js";
 import { config } from "../config/env.js";
-
-/** Local word counter for sourceWordCount bookkeeping on the fallback path. */
-const countWords = (value) =>
-  String(value || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean).length;
 
 /**
  * Pipeline configuration
  */
 const PIPELINE_CONFIG = {
   BATCH_SIZE: 5, // Process 5 articles at a time
-  RETRY_ATTEMPTS: 3, // total attempts per AI call (1 initial + 2 retries)
-  RETRY_DELAY: 2000, // 2 seconds
+  // Pages shorter than this are too thin to take sentences from.
+  SUMMARY_PAGE_MIN_CHARS: 300,
+  // After this many failed fetches in a row a site is skipped for the run, so
+  // a site that is down cannot stall the pipeline on timeouts.
+  HOST_FAILURE_LIMIT: 5,
 };
 
 /**
@@ -46,6 +47,10 @@ class PipelineLogger {
       failed: 0,
       duplicates: 0,
       skippedOutsideRetention: 0,
+      // How each short summary was written, e.g. { extractive: 12, "publisher-page": 30 }
+      summaryMethods: {},
+      // Page fetches per source: { ok, thin, robots, failed, skipped }
+      pageFetch: {},
       startTime: null,
       endTime: null,
     };
@@ -271,107 +276,56 @@ class NewsProcessor {
   }
 
   /**
-   * Step 3: Generate structured content (summary, keyFacts, detailed) with AI
+   * Step 3: Short summary and key facts for each article, built from the
+   * publisher's own text (see content/shortSummary.js). Pages are fetched one
+   * at a time with a pause between requests.
    */
   async _summarizeArticles(articles, onBatch = null) {
     const summarized = [];
     let pendingBatch = [];
-    let aiCalls = 0;
-    // A 429 here means no provider frees up within a background call's wait
-    // limit, so the rest of this run uses the fallback straight away instead
-    // of every article waiting out the same limit.
-    let aiPaused = false;
+    const fetchPage = this._createPageFetcher();
+
     for (const article of articles) {
-      try {
-        if (aiPaused) {
-          throw new Error("AI rate-limited for this run; using deterministic fallback");
-        }
-        // Single AI call produces headline/summary/keyFacts/detailed together
-        // so the model can keep them distinct (services/content/).
-        if (aiCalls >= config.AI_DAILY_LIMIT) {
-          throw new Error("AI daily limit reached; using deterministic fallback");
-        }
-        aiCalls += 1;
-        const content = await this._summarizeWithRetry({
-          source: article.source,
-          section: article.section,
-          title: article.headline,
-          // RSS feeds rarely carry the article body, so the input is usually
-          // the headline plus the feed snippet. sourceWordCount on the result
-          // records what the model actually saw.
-          text: `${article.headline}. ${article.summary}${
-            article.content ? `. ${article.content}` : ""
-          }`,
-        });
+      const page = await fetchPage(article);
+      const content = buildShortSummary({
+        headline: article.headline,
+        source: article.source,
+        rssDescription: article.rssDescription,
+        pageDescriptions: page?.descriptions,
+        // Paragraph breaks help tell sentences from headings; pages without
+        // <p> paragraphs fall back to the flattened text.
+        pageText: page?.available
+          ? page.paragraphs.length >= 3
+            ? page.paragraphs.join("\n")
+            : page.text
+          : "",
+      });
 
-        summarized.push({
-          ...article,
-          // v2 content model: no separate subtitle. The summary lives in the
-          // Overview tab; an empty gist keeps the header from showing a deck
-          // that duplicates the summary's first sentence.
-          gist: "",
-          headline: content.headline || article.headline,
-          summary: content.summary,
-          bulletPoints: content.keyFacts || [],
-          keyFacts: content.keyFacts || [],
-          tags: content.tags,
-          subtopics: content.subtopics,
-          aiCategory: content.category,
-          promptVersion: content.promptVersion,
-          sourceWordCount: content.sourceWordCount,
-          modelUsed: content.modelUsed,
-        });
-        pendingBatch.push(summarized[summarized.length - 1]);
-        if (onBatch && pendingBatch.length >= PIPELINE_CONFIG.BATCH_SIZE) {
-          await onBatch(pendingBatch);
-          pendingBatch = [];
-        }
-      } catch (error) {
-        if (error.statusCode === 429 && !aiPaused) {
-          aiPaused = true;
-          this.logger.warn("AI rate-limited; pausing AI for the rest of this run", {
-            retryAfterMs: error.retryAfterMs,
-          });
-        }
-        // If AI fails, fall back to rule-based summary from RSS description
-        this.logger.warn("AI summarization failed, using fallback", {
-          headline: article.headline?.substring(0, 50),
-          error: error.message,
-        });
+      const methods = this.logger.stats.summaryMethods;
+      methods[content.method] = (methods[content.method] || 0) + 1;
 
-        // Deterministic fallback. The snippet IS the overview, so it is used
-        // as the summary - but keyFacts must never repeat it. If the snippet
-        // is too thin to summarize, say so with one honest sentence instead
-        // of padding.
-        const sentences = article.summary
-          .split(/(?<=[.!?])\s+/)
-          .map((sentence) => sentence.trim())
-          .filter(Boolean);
-        const shortSummary = sentences.slice(0, 3).join(" ");
-        const fallbackSummary =
-          shortSummary.length >= 50
-            ? shortSummary
-            : `${article.headline}. Read the original report at ${article.source}.`;
-        const usableSummary = fallbackSummary.slice(0, 1000);
-
-        summarized.push({
-          ...article,
-          gist: "",
-          summary: usableSummary,
-          bulletPoints: [],
-          keyFacts: [],
-          tags: this._deriveTags(`${article.headline} ${article.summary}`),
-          aiCategory: null,
-          promptVersion: null,
-          sourceWordCount: countWords(
-            `${article.headline} ${article.summary}`,
-          ),
-        });
-        pendingBatch.push(summarized[summarized.length - 1]);
-        if (onBatch && pendingBatch.length >= PIPELINE_CONFIG.BATCH_SIZE) {
-          await onBatch(pendingBatch);
-          pendingBatch = [];
-        }
+      summarized.push({
+        ...article,
+        // v2 content model: no separate subtitle. The summary lives in the
+        // Overview tab; an empty gist keeps the header from showing a deck
+        // that duplicates the summary's first sentence.
+        gist: "",
+        summary: content.summary,
+        bulletPoints: content.keyFacts,
+        keyFacts: content.keyFacts,
+        tags: this._deriveTags(
+          `${article.headline} ${content.summary} ${content.keyFacts.join(" ")}`,
+        ),
+        aiCategory: null,
+        promptVersion: null,
+        sourceWordCount: content.sourceWords,
+        summaryMethod: content.method,
+        modelUsed: "rule-based",
+      });
+      pendingBatch.push(summarized[summarized.length - 1]);
+      if (onBatch && pendingBatch.length >= PIPELINE_CONFIG.BATCH_SIZE) {
+        await onBatch(pendingBatch);
+        pendingBatch = [];
       }
     }
 
@@ -379,7 +333,79 @@ class NewsProcessor {
       await onBatch(pendingBatch);
     }
 
+    this.logger.info("Short summaries built", {
+      methods: this.logger.stats.summaryMethods,
+      pageFetch: this.logger.stats.pageFetch,
+    });
+
     return onBatch ? summarized : classifyArticles(summarized);
+  }
+
+  /**
+   * A function that fetches one article's page politely: requests are spaced
+   * by PAGE_FETCH_DELAY_MS, a site that keeps failing is skipped for the rest
+   * of the run, and everything is counted per source in the pipeline stats.
+   * Returns null when page fetching is switched off or skipped.
+   */
+  _createPageFetcher() {
+    const failuresByHost = new Map();
+    const skippedHosts = new Set();
+    let lastFetchEnded = 0;
+
+    const count = (source, outcome) => {
+      const row = (this.logger.stats.pageFetch[source] ||= {
+        ok: 0,
+        thin: 0,
+        robots: 0,
+        failed: 0,
+        skipped: 0,
+      });
+      row[outcome] += 1;
+    };
+
+    return async (article) => {
+      if (!config.SUMMARY_PAGE_FETCH || !article.url) return null;
+
+      let host;
+      try {
+        host = new URL(article.url).hostname;
+      } catch {
+        return null;
+      }
+      if (skippedHosts.has(host)) {
+        count(article.source, "skipped");
+        return null;
+      }
+
+      const wait = lastFetchEnded + config.PAGE_FETCH_DELAY_MS - Date.now();
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      const page = await extractArticleText(article.url, {
+        minChars: PIPELINE_CONFIG.SUMMARY_PAGE_MIN_CHARS,
+        paragraphs: true,
+      });
+      lastFetchEnded = Date.now();
+
+      if (page.available) {
+        count(article.source, "ok");
+        failuresByHost.set(host, 0);
+      } else if (page.failed) {
+        count(article.source, "failed");
+        const failures = (failuresByHost.get(host) || 0) + 1;
+        failuresByHost.set(host, failures);
+        if (failures >= PIPELINE_CONFIG.HOST_FAILURE_LIMIT) {
+          skippedHosts.add(host);
+          this.logger.warn("Page fetches keep failing; skipping this site for the run", {
+            host,
+            lastError: page.reason,
+          });
+        }
+      } else if (/robots\.txt/.test(page.reason)) {
+        count(article.source, "robots");
+      } else {
+        count(article.source, "thin");
+      }
+      return page;
+    };
   }
 
   _deriveTags(text) {
@@ -397,33 +423,6 @@ class NewsProcessor {
       )
       .map(([tag]) => tag);
     return tags.length ? tags.slice(0, 3) : ["International"];
-  }
-
-  /**
-   * Generate content with retry logic
-   */
-  async _summarizeWithRetry(input, attempt = 1) {
-    try {
-      return await generateArticleContent(input);
-    } catch (error) {
-      // A provider-wide 429 will affect every remaining article in this run.
-      // Retrying it only delays the deterministic fallback and keeps the
-      // dashboard empty while hundreds of RSS items are processed.
-      if (error.statusCode === 429 || /\b429\b|rate-limited/i.test(error.message)) {
-        throw error;
-      }
-      if (attempt < PIPELINE_CONFIG.RETRY_ATTEMPTS) {
-        this.logger.warn("Retrying summarization", {
-          attempt,
-          error: error.message,
-        });
-        await new Promise((resolve) =>
-          setTimeout(resolve, PIPELINE_CONFIG.RETRY_DELAY),
-        );
-        return this._summarizeWithRetry(input, attempt + 1);
-      }
-      throw error;
-    }
   }
 
   /**
@@ -455,6 +454,7 @@ class NewsProcessor {
           bulletPoints: article.keyFacts || article.bulletPoints || [],
           keyFacts: article.keyFacts || article.bulletPoints || [],
           promptVersion: article.promptVersion || null,
+          summaryMethod: article.summaryMethod,
           sourceWordCount: article.sourceWordCount,
           ...(article.sourceTier ? { sourceTier: article.sourceTier } : {}),
           tags: article.tags?.length
