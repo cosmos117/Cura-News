@@ -219,12 +219,3 @@ All routes start with `/api`. 🔒 means a login token is required.
 | `DELETE /me` 🔒 | Permanently delete your account |
 
 </details>
-
-## Known limitations
-
-- Logging out clears the token in the browser only; it cannot be revoked on the
-  server before it expires.
-- The collection schedule runs inside the server, so running more than one server
-  instance would collect every story twice.
-- Explainers depend on free AI allowances. On an unusually busy day a reader may
-  be asked to try again a little later.
