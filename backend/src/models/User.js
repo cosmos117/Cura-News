@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import { EMAIL_PATTERN, MAX_EMAIL_LENGTH } from "../utils/validation.js";
 import { SOURCE_NAMES } from "../config/feeds.js";
 import { TOPIC_IDS } from "../config/topics.js";
 
@@ -23,10 +24,8 @@ const userSchema = new mongoose.Schema(
       unique: [true, "Email already exists"],
       lowercase: true,
       // TLDs of any length: Google accounts can use domains like .info or .design.
-      match: [
-        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,})+$/,
-        "Please provide a valid email address",
-      ],
+      maxlength: [MAX_EMAIL_LENGTH, "Email is too long"],
+      match: [EMAIL_PATTERN, "Please provide a valid email address"],
     },
     // Google-only accounts have no password; they sign in with an ID token.
     password: {

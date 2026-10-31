@@ -37,6 +37,8 @@ const bookmarkSchema = new mongoose.Schema(
 );
 
 bookmarkSchema.index({ user: 1, article: 1 }, { unique: true });
+// The Saved page lists a reader's bookmarks newest first.
+bookmarkSchema.index({ user: 1, createdAt: -1 });
 
 /** Build the stored copy of a News document (lean or hydrated). */
 bookmarkSchema.statics.snapshotFrom = function (article) {

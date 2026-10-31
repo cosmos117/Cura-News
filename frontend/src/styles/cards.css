@@ -58,16 +58,16 @@
 }
 
 .article-card--the-hindu::after {
-  background-image: url("/logos/the-hindu.png");
+  background-image: url("/logos/the-hindu.webp");
 }
 
 .article-card--indian-express::after {
-  background-image: url("/logos/indian-express.png");
+  background-image: url("/logos/indian-express.webp");
   background-size: min(40%, 190px) auto;
 }
 
 .article-card--times-of-india::after {
-  background-image: url("/logos/times-of-india.png");
+  background-image: url("/logos/times-of-india.webp");
 }
 
 .article-card__body {

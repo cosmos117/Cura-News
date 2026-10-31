@@ -36,7 +36,8 @@ const resolveUser = async (token) => {
     throw new AppError("Invalid token payload", 401);
   }
 
-  const user = await User.findById(decoded.userId);
+  // Runs on every signed-in request: read only what is needed.
+  const user = await User.findById(decoded.userId).select("name email isActive").lean();
 
   if (!user) {
     throw new AppError("User not found", 404);

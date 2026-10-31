@@ -6,9 +6,9 @@ import { useState } from "react";
  * REAL LOGO FILES: drop them in `frontend/public/logos/` using exactly these
  * filenames and they are used automatically:
  *
- *   frontend/public/logos/the-hindu.png
- *   frontend/public/logos/indian-express.png
- *   frontend/public/logos/times-of-india.png
+ *   frontend/public/logos/the-hindu.webp
+ *   frontend/public/logos/indian-express.webp
+ *   frontend/public/logos/times-of-india.webp
  *
  * Files in `public/` are served from the site root, so the src is `/logos/...`
  * with no import needed. If a file is missing the <img> fires onError, removes
@@ -22,15 +22,15 @@ import { useState } from "react";
 
 const SOURCE_ART = {
   "The Hindu": {
-    file: "/logos/the-hindu.png",
+    file: "/logos/the-hindu.webp",
     color: "#fb7575",
   },
   "Indian Express": {
-    file: "/logos/indian-express.png",
+    file: "/logos/indian-express.webp",
     color: "#fde871",
   },
   "Times of India": {
-    file: "/logos/times-of-india.png",
+    file: "/logos/times-of-india.webp",
     color: "#ffa07b",
   },
 };

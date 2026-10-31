@@ -1605,6 +1605,54 @@ await test("GET /api/stats is cached between visits", async () => {
   assert.equal((await api("/stats")).data.data.readers, before + 1);
 });
 
+// ---------- hardening ----------
+await test("a crafted email cannot stall sign-up (no catastrophic regex)", async () => {
+  const started = Date.now();
+  const res = await api("/auth/register", {
+    method: "POST",
+    headers: { "X-Forwarded-For": "203.0.113.7" },
+    body: {
+      name: "Slow Loris",
+      email: `${"a".repeat(60)}!`,
+      password: "supersecret1",
+      confirmPassword: "supersecret1",
+    },
+  });
+  assert.equal(res.status, 400);
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
+});
+
+await test("sign-in fields must be text, never query objects", async () => {
+  const login = await api("/auth/login", {
+    method: "POST",
+    headers: { "X-Forwarded-For": "203.0.113.8" },
+    body: { email: { $ne: null }, password: "anything1" },
+  });
+  assert.equal(login.status, 400);
+
+  const tooLong = await api("/auth/login", {
+    method: "POST",
+    headers: { "X-Forwarded-For": "203.0.113.8" },
+    body: { email: "someone@example.com", password: "x".repeat(200) },
+  });
+  assert.equal(tooLong.status, 400);
+});
+
+await test("oversized request bodies are refused", async () => {
+  const res = await api("/auth/login", {
+    method: "POST",
+    headers: { "X-Forwarded-For": "203.0.113.9" },
+    body: { email: "someone@example.com", password: "p".repeat(200_000) },
+  });
+  assert.equal(res.status, 413);
+});
+
+await test("API responses are compressed when the client accepts it", async () => {
+  const res = await fetch(`${baseUrl}/news?limit=50`, { headers: { "Accept-Encoding": "gzip" } });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-encoding"), "gzip");
+});
+
 // ---------- teardown ----------
 // A failing test does not throw here, so this always runs.
 await News.deleteMany({});

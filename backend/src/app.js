@@ -1,6 +1,7 @@
 import express from "express";
 import morgan from "morgan";
 import helmet from "helmet";
+import compression from "compression";
 import { config } from "./config/env.js";
 import { corsMiddleware } from "./middleware/corsMiddleware.js";
 import { apiLimiter } from "./middleware/rateLimiter.js";
@@ -20,12 +21,14 @@ app.set("trust proxy", config.TRUST_PROXY);
 // CORS - Handle cross-origin requests
 app.use(corsMiddleware());
 app.use(helmet());
+// Feed responses are repetitive JSON and shrink several times over.
+app.use(compression());
 
 // Body Parser - Parse incoming JSON requests.
 // 10MB is far more than any legitimate payload (the largest is a 10,000-char
 // article string) and was a cheap memory-pressure vector under load.
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ limit: "1mb", extended: true }));
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ limit: "100kb", extended: true }));
 
 // Logging - HTTP request logging
 app.use(morgan(config.isDevelopment ? "dev" : "combined"));

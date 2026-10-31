@@ -4,6 +4,10 @@ import User from "../models/User.js";
 import { config } from "../config/env.js";
 import { AppError, asyncHandler } from "../middleware/errorHandler.js";
 import { generateToken, createAuthResponse } from "../services/jwtService.js";
+import { MAX_PASSWORD_LENGTH, isValidEmail } from "../utils/validation.js";
+
+/** A non-empty string. Objects would reach Mongo queries as operators. */
+const isText = (value) => typeof value === "string" && value.length > 0;
 
 /**
  * Register a new user
@@ -21,7 +25,7 @@ export const register = asyncHandler(async (req, res, next) => {
   const { name, email, password, confirmPassword } = req.body;
 
   // Validation
-  if (!name || !email || !password) {
+  if (!isText(name) || !isText(email) || !isText(password)) {
     throw new AppError("Please provide name, email, and password", 400);
   }
 
@@ -38,10 +42,11 @@ export const register = asyncHandler(async (req, res, next) => {
   if (password.length < 8) {
     throw new AppError("Password must be at least 8 characters", 400);
   }
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    throw new AppError(`Password cannot exceed ${MAX_PASSWORD_LENGTH} characters`, 400);
+  }
 
-  // Email format check (basic)
-  const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,})+$/;
-  if (!emailRegex.test(email)) {
+  if (!isValidEmail(email)) {
     throw new AppError("Please provide a valid email address", 400);
   }
 
@@ -89,7 +94,7 @@ export const login = asyncHandler(async (req, res, next) => {
   const { email, password } = req.body;
 
   // Validation
-  if (!email || !password) {
+  if (!isText(email) || !isText(password) || password.length > MAX_PASSWORD_LENGTH) {
     throw new AppError("Please provide email and password", 400);
   }
 

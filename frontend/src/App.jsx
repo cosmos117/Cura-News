@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import {
   BrowserRouter as Router,
   Routes,
@@ -6,15 +7,40 @@ import {
 } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import ErrorBoundary from "./components/ErrorBoundary";
-import Login from "./pages/Login";
-import Signup from "./pages/Signup";
-import Dashboard from "./pages/Dashboard";
-import Article from "./pages/Article";
-import NotFound from "./pages/NotFound";
 import Landing from "./pages/Landing";
-import Bookmarks from "./pages/Bookmarks";
-import Onboarding from "./pages/Onboarding";
-import Settings from "./pages/Settings";
+
+const RELOADED_KEY = "curaChunkReload";
+
+/**
+ * Load a page's code only when it is first opened. After a deploy, a tab
+ * opened earlier can ask for a file that no longer exists; reload once to pick
+ * up the new build instead of showing an error.
+ */
+const lazyPage = (load) =>
+  lazy(() =>
+    load()
+      .then((module) => {
+        sessionStorage.removeItem(RELOADED_KEY);
+        return module;
+      })
+      .catch((error) => {
+        if (!sessionStorage.getItem(RELOADED_KEY)) {
+          sessionStorage.setItem(RELOADED_KEY, "1");
+          window.location.reload();
+          return new Promise(() => {});
+        }
+        throw error;
+      }),
+  );
+
+const Login = lazyPage(() => import("./pages/Login"));
+const Signup = lazyPage(() => import("./pages/Signup"));
+const Dashboard = lazyPage(() => import("./pages/Dashboard"));
+const Article = lazyPage(() => import("./pages/Article"));
+const NotFound = lazyPage(() => import("./pages/NotFound"));
+const Bookmarks = lazyPage(() => import("./pages/Bookmarks"));
+const Onboarding = lazyPage(() => import("./pages/Onboarding"));
+const Settings = lazyPage(() => import("./pages/Settings"));
 
 const FullPageSpinner = ({ label = "Loading..." }) => (
   <div className="page page--centered">
@@ -66,69 +92,71 @@ function PublicOnlyRoute({ children }) {
 
 function AppRoutes() {
   return (
-    <Routes>
-      <Route
-        path="/login"
-        element={
-          <PublicOnlyRoute>
-            <Login />
-          </PublicOnlyRoute>
-        }
-      />
-      <Route
-        path="/signup"
-        element={
-          <PublicOnlyRoute>
-            <Signup />
-          </PublicOnlyRoute>
-        }
-      />
+    <Suspense fallback={<FullPageSpinner />}>
+      <Routes>
+        <Route
+          path="/login"
+          element={
+            <PublicOnlyRoute>
+              <Login />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/signup"
+          element={
+            <PublicOnlyRoute>
+              <Signup />
+            </PublicOnlyRoute>
+          }
+        />
 
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <Dashboard />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/article/:id"
-        element={
-          <ProtectedRoute>
-            <Article />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/bookmarks"
-        element={
-          <ProtectedRoute>
-            <Bookmarks />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/welcome"
-        element={
-          <ProtectedRoute>
-            <Onboarding />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/settings"
-        element={
-          <ProtectedRoute>
-            <Settings />
-          </ProtectedRoute>
-        }
-      />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/article/:id"
+          element={
+            <ProtectedRoute>
+              <Article />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/bookmarks"
+          element={
+            <ProtectedRoute>
+              <Bookmarks />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/welcome"
+          element={
+            <ProtectedRoute>
+              <Onboarding />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <Settings />
+            </ProtectedRoute>
+          }
+        />
 
-      <Route path="/" element={<Landing />} />
-      {/* Real 404 instead of silently redirecting a mistyped URL */}
-      <Route path="*" element={<NotFound />} />
-    </Routes>
+        <Route path="/" element={<Landing />} />
+        {/* Real 404 instead of silently redirecting a mistyped URL */}
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </Suspense>
   );
 }
 
