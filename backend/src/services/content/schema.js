@@ -12,23 +12,6 @@ import { z } from "zod";
 import { tierForWordCount, TIER_FULL, TIER_PARTIAL, TIER_THIN } from "./tiers.js";
 
 export const VALID_TAGS = ["Polity", "Economy", "Defense", "Science", "International"];
-export const VALID_CATEGORIES = [
-  "Politics & Governance",
-  "Opinion & Editorial",
-  "Economy & Business",
-  "Agriculture & Rural",
-  "World Affairs",
-  "Defence & Security",
-  "Law & Judiciary",
-  "Science & Technology",
-  "Environment & Climate",
-  "Health",
-  "Education & Society",
-  "Culture & Lifestyle",
-  "Sports",
-  "Entertainment",
-  "Misc",
-];
 
 export const countWords = (value) =>
   String(value || "")
@@ -90,14 +73,13 @@ const detailedSchema = z
   )
   .nullable();
 
-/** Classification fields piggyback on the same single call. */
+/** Tags piggyback on the same call. The topic is never asked for: it is fixed at ingest. */
 const classificationSchema = {
   tags: z
     .array(z.enum(VALID_TAGS))
     .min(1)
     .max(3)
     .default(["International"]),
-  category: z.enum(VALID_CATEGORIES).default("Other"),
   subtopics: z.array(z.string().trim().max(80)).max(5).default([]),
   confidence: z.enum(["high", "medium", "low"]).default("medium"),
 };

@@ -1170,12 +1170,7 @@ await test("UTC day boundary: article from yesterday is not 'today'", async () =
 
 // ---------- categories & combined filtering ----------
 // Seeded after the UTC test above, which asserts an exact `total`.
-const {
-  resolveCategory,
-  categoryFromFeed,
-  categoryFromKeywords,
-  NEWS_CATEGORIES,
-} = await import("../src/utils/category.js");
+const { NEWS_CATEGORIES } = await import("../src/utils/category.js");
 
 const politicsArticle = await News.create({
   source: "The Hindu",
@@ -1221,57 +1216,6 @@ await test("category defaults to Misc when not supplied", async () => {
     date: new Date(),
   });
   assert.equal(plain.category, "Misc");
-});
-
-await test("category derivation prefers the feed category over keywords", async () => {
-  // "parliament" is a Politics keyword, but the feed says "business", and the
-  // feed label must win.
-  const result = resolveCategory({
-    feedCategory: "business",
-    text: "Parliament discussed the budget allocation in detail",
-    aiCategory: "Science & Technology",
-  });
-  assert.equal(result.category, "Economy & Business");
-  assert.equal(result.derivedBy, "feed");
-});
-
-await test("category derivation falls back to keywords when the feed is unmapped", async () => {
-  const result = resolveCategory({
-    feedCategory: "general",
-    text: "The parliament debated the new electoral reform bill",
-    aiCategory: "Economy & Business",
-  });
-  assert.equal(result.category, "Politics & Governance");
-  assert.equal(result.derivedBy, "keywords");
-});
-
-await test("category derivation uses the AI only as a last resort", async () => {
-  // No feed label, and the keyword rules deliberately do not fire on this
-  // text (\b-anchored, so "said" cannot match "ai" and "police" cannot match
-  // any Politics term).
-  const text = "Traffic was slow on the highway over the weekend, officials said.";
-  assert.equal(categoryFromKeywords(text), null, "fixture must not match any keyword rule");
-
-  const result = resolveCategory({
-    feedCategory: null,
-    text,
-    aiCategory: "Entertainment",
-  });
-  assert.equal(result.category, "Entertainment");
-  assert.equal(result.derivedBy, "ai");
-});
-
-await test("category derivation lands on Misc with nothing to go on", async () => {
-  const result = resolveCategory({ feedCategory: "general", text: "zorb blimp" });
-  assert.equal(result.category, "Misc");
-  assert.equal(result.derivedBy, "default");
-});
-
-await test("keyword matching is word-boundary safe", async () => {
-  // "ai" must not match "said", "war" must not match "award".
-  assert.equal(categoryFromKeywords("He said the plan was unclear"), null);
-  assert.equal(categoryFromKeywords("They received an award for the war memoir"), null);
-  assert.equal(categoryFromFeed("technology"), "Science & Technology");
 });
 
 await test("GET /news?category= filters by category", async () => {
@@ -1603,6 +1547,107 @@ await test("GET /api/stats is cached between visits", async () => {
   assert.equal((await api("/stats")).data.data.readers, before);
   usageStats.clearStatsCache();
   assert.equal((await api("/stats")).data.data.readers, before + 1);
+});
+
+// ---------- one topic per article ----------
+await test("topic and category always agree when an article is created", async () => {
+  const base = {
+    source: "The Hindu",
+    summary: "A long enough summary so the article passes the minimum length check for summaries.",
+    bulletPoints: ["One point"],
+    tags: ["Polity"],
+    date: new Date(),
+  };
+  const fromTopic = await News.create({ ...base, headline: "From topic only", topic: "sports" });
+  assert.equal(fromTopic.category, "Sports");
+  const fromCategory = await News.create({ ...base, headline: "From category only", category: "Health" });
+  assert.equal(fromCategory.topic, "health");
+  const conflicting = await News.create({
+    ...base,
+    headline: "Conflicting pair",
+    topic: "law-judiciary",
+    category: "Environment & Climate",
+  });
+  assert.equal(conflicting.category, "Law & Judiciary", "the topic wins");
+  await News.deleteMany({ _id: { $in: [fromTopic._id, fromCategory._id, conflicting._id] } });
+});
+
+await test("an article's topic cannot be changed after it is collected", async () => {
+  const article = await News.create({
+    source: "The Hindu",
+    headline: "Locked topic story",
+    summary: "A long enough summary so the article passes the minimum length check for summaries.",
+    bulletPoints: ["One point"],
+    tags: ["Polity"],
+    topic: "politics-governance",
+    date: new Date(),
+  });
+  await News.updateOne({ _id: article._id }, { $set: { category: "Health", topic: "health" } });
+  await News.findByIdAndUpdate(article._id, { category: "Sports", headline: "Locked topic story (updated)" });
+  const after = await News.findById(article._id).lean();
+  assert.equal(after.topic, "politics-governance");
+  assert.equal(after.category, "Politics & Governance");
+  assert.equal(after.headline, "Locked topic story (updated)", "other fields still update");
+
+  const doc = await News.findById(article._id);
+  doc.topic = "sports";
+  await assert.rejects(doc.save(), /topic is set when it is collected/);
+  await News.deleteOne({ _id: article._id });
+});
+
+await test("generating an explainer never changes the article's topic", async () => {
+  const article = await News.create({
+    source: "Indian Express",
+    headline: "Prime Minister speaks at unity day event",
+    summary: "The Prime Minister addressed a national unity day gathering and spoke about rumours on social media.",
+    bulletPoints: ["Unity day event held"],
+    tags: ["Polity"],
+    topic: "politics-governance",
+    url: "https://topic-lock.example/pm-speech",
+    date: new Date(),
+  });
+  const sentence = (n) =>
+    `Paragraph ${["one", "two", "three", "four", "five", "six"][n]} of the report describes officials, citizens and organisers discussing the event, its arrangements, the speeches delivered and the reactions that followed across the region during the day.`;
+  const originalGet = axios.get;
+  axios.get = async (target) => {
+    if (!String(target).includes("topic-lock.example")) return originalGet(target);
+    if (String(target).endsWith("/robots.txt")) return { status: 404, data: "" };
+    return { data: pageHtml({ paragraphs: [0, 1, 2, 3, 4, 5].map(sentence) }) };
+  };
+  const narrative =
+    "Speaking at a national gathering, the leader framed recent political disagreements as attempts to weaken unity, and warned that misleading claims were circulating widely online among ordinary readers. He presented the government as determined to continue its programme despite resistance from rival parties and critics.\n\n" +
+    "The remarks matter because they set the tone for the coming political season, when parties will compete for public trust. Observers expect opponents to respond sharply, while supporters are likely to repeat the message at local events, keeping the debate about misinformation and national cohesion in the headlines for weeks.";
+  // The model still volunteers its own category; it must be ignored.
+  stubAi({ groq: () => aiReply("groq", { detailed: narrative, tags: ["Polity"], category: "Environment & Climate", confidence: "high" }) });
+  try {
+    const res = await api(`/news/${article._id}/detailed`, { method: "POST", token, body: {} });
+    assert.equal(res.status, 200, JSON.stringify(res.data));
+    assert.equal(res.data.data.detailedStatus, "DONE");
+    assert.equal(res.data.data.category, "Politics & Governance");
+    const stored = await News.findById(article._id).lean();
+    assert.equal(stored.topic, "politics-governance");
+    assert.equal(stored.category, "Politics & Governance");
+  } finally {
+    axios.get = originalGet;
+    unstubAi();
+    await News.deleteOne({ _id: article._id });
+  }
+});
+
+await test("startup repair realigns categories that drifted from their topic", async () => {
+  const { insertedId } = await News.collection.insertOne({
+    source: "Indian Express",
+    headline: "Drifted category story",
+    summary: "Stored by an older build whose detailed summary overwrote the category field.",
+    topic: "politics-governance",
+    category: "Environment & Climate",
+    isPublished: true,
+    date: new Date(),
+  });
+  assert.ok((await News.syncCategoryWithTopic()) >= 1);
+  assert.equal((await News.findById(insertedId).lean()).category, "Politics & Governance");
+  assert.equal(await News.syncCategoryWithTopic(), 0, "safe to run again");
+  await News.deleteOne({ _id: insertedId });
 });
 
 // ---------- hardening ----------

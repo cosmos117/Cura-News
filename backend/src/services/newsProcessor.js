@@ -13,7 +13,7 @@
 
 import News from "../models/News.js";
 import { fetchRssArticles } from "./rssFetcher.js";
-import { resolveCategory } from "../utils/category.js";
+import { TOPIC_LABELS } from "../config/topics.js";
 import { istDayKey, istDayRange } from "../utils/date.js";
 import { generateTopDetailedSummaries } from "./detailedSummaryService.js";
 import { classifyArticles } from "./topicClassifier.js";
@@ -478,16 +478,11 @@ class NewsProcessor {
   async _storeArticles(articles) {
     for (const article of articles) {
       try {
-        // Feed category first, then keyword rules, then the AI's suggestion.
-        // Resolved here rather than mid-pipeline so the stored article always
-        // carries a category and the News enum can never reject the write.
-        const { category, derivedBy } = resolveCategory({
-          feedCategory: article.feedCategory || article.rssCategory,
-          text: `${article.headline || ""} ${article.summary || ""} ${
-            article.content || ""
-          }`,
-          aiCategory: article.aiCategory,
-        });
+        // One topic per article: the topic classifier's answer (keywords,
+        // then feed section, then AI) is final, and the category shown on
+        // cards is only its label.
+        const topic = TOPIC_LABELS[article.topic] ? article.topic : "misc";
+        const category = TOPIC_LABELS[topic];
 
         // This is the structured content produced by the content pipeline;
         // source text is never stored.
@@ -518,7 +513,7 @@ class NewsProcessor {
           summarizedAt: new Date(),
           modelUsed: article.modelUsed || (article.aiCategory ? "unknown-ai" : "rule-based"),
           category,
-          topic: article.topic,
+          topic,
           secondaryTopics: article.secondaryTopics || [],
           topicSource: article.topicSource,
           topicConfidence: article.topicConfidence,
@@ -544,8 +539,8 @@ class NewsProcessor {
         this.logger.info("Article stored", {
           id: created._id,
           headline: created.headline?.substring(0, 40),
-          category,
-          derivedBy,
+          topic,
+          topicSource: article.topicSource,
         });
         this.logger.stats.stored++;
       } catch (error) {

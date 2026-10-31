@@ -197,11 +197,10 @@ export const generateDetailedNews = asyncHandler(async (req, res) => {
 
     if (status === "DONE") {
       // v2: the detailed narrative never rewrites the headline; it only
-      // fills the detailed fields and may refine tags/category.
+      // fills the detailed fields and may refine tags. The topic never changes.
       update.detailedSummary = result.detailed;
       update.detailedConfidence = result.confidence;
       update.detailedGeneratedAt = new Date();
-      update.category = result.category;
       update.tags = result.tags?.length > 0 ? result.tags : locked.tags;
       update.promptVersion = result.promptVersion;
       update.sourceWordCount = result.sourceWordCount;

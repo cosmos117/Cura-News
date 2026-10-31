@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { withTopicLabels } from "../config/topics.js";
 import Bookmark, { BOOKMARK_TTL_MS } from "../models/Bookmark.js";
 import News from "../models/News.js";
 import { AppError, asyncHandler } from "../middleware/errorHandler.js";
@@ -26,7 +27,7 @@ const toBookmarkedArticle = (bookmark, liveArticle) => {
   const base = liveArticle
     ? { ...Bookmark.snapshotFrom(liveArticle), archived: false }
     : {
-        ...bookmark.snapshot,
+        ...withTopicLabels(bookmark.snapshot),
         archived: true,
         detailedStatus:
           bookmark.snapshot.detailedStatus === "DONE" ? "DONE" : "UNAVAILABLE",

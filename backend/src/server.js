@@ -41,6 +41,10 @@ const start = async () => {
       { detailedStatus: "FAILED", lastError: RATE_LIMITED_MESSAGE },
       { $set: { detailedStatus: "NONE" } },
     );
+    // One topic per article: undo any category that drifted from its topic
+    // (older builds let the detailed summary overwrite it).
+    const realigned = await News.syncCategoryWithTopic();
+    if (realigned) console.log(`🏷️  Realigned ${realigned} article categories with their topics`);
   } catch (error) {
     console.error("❌ Failed to start server:", error.message);
     process.exit(1);

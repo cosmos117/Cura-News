@@ -49,25 +49,6 @@ const normalizeOutput = (output, fallbackTags = []) => {
   const candidate = {
     ...output,
     tags: tags.length ? tags : fallbackTags,
-    category: [
-      "Politics & Governance",
-      "Opinion & Editorial",
-      "Economy & Business",
-      "Agriculture & Rural",
-      "World Affairs",
-      "Defence & Security",
-      "Law & Judiciary",
-      "Science & Technology",
-      "Environment & Climate",
-      "Health",
-      "Education & Society",
-      "Culture & Lifestyle",
-      "Sports",
-      "Entertainment",
-      "Misc",
-    ].includes(output.category)
-      ? output.category
-      : "Other",
     confidence: ["high", "medium", "low"].includes(output.confidence)
       ? output.confidence
       : "medium",
@@ -100,7 +81,6 @@ Return JSON:
 {
   "detailed": "100-120 words in exactly 2 short paragraphs (separate paragraphs with a blank line), or null if the text is too thin",
   "tags": ["Polity", "Economy", "Defense", "Science", "International"],
-  "category": "Politics & Governance|Opinion & Editorial|Economy & Business|Agriculture & Rural|World Affairs|Defence & Security|Law & Judiciary|Science & Technology|Environment & Climate|Health|Education & Society|Culture & Lifestyle|Sports|Entertainment|Misc",
   "confidence": "high|medium|low"
 }`;
 
@@ -355,9 +335,8 @@ export async function generateTopDetailedSummaries() {
         detailedConfidence: result.confidence,
         detailedGeneratedAt: new Date(),
         modelUsed: result.modelUsed || locked.modelUsed,
-        category: result.category,
         // v2: the headline is owned by the ingestion-time call; the detailed
-        // narrative only refines tags/category, never the title.
+        // narrative only refines tags; it never changes the title or topic.
         tags: result.tags?.length ? result.tags : locked.tags,
         promptVersion: result.promptVersion,
         sourceWordCount: result.sourceWordCount,

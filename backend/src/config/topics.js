@@ -19,3 +19,14 @@ export const TOPICS = [
 export const TOPIC_IDS = TOPICS.map((topic) => topic.id);
 export const TOPIC_LABELS = Object.fromEntries(TOPICS.map((topic) => [topic.id, topic.label]));
 export const topicById = (id) => TOPICS.find((topic) => topic.id === id);
+export const TOPIC_ID_BY_LABEL = Object.fromEntries(TOPICS.map((topic) => [topic.label, topic.id]));
+
+/**
+ * An article's one topic, as both fields readers see. `topic` is the source
+ * of truth; `category` is only its label. Older rows without a topic fall back
+ * to their stored category.
+ */
+export const withTopicLabels = (data) => {
+  const label = TOPIC_LABELS[data.topic] || data.category || "Misc";
+  return { ...data, category: label, topicLabel: label };
+};

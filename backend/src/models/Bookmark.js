@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { TOPIC_LABELS } from "../config/topics.js";
+import { withTopicLabels } from "../config/topics.js";
 
 /** A bookmark lives for 30 days from the moment it was saved. */
 export const BOOKMARK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -43,10 +43,7 @@ bookmarkSchema.index({ user: 1, createdAt: -1 });
 /** Build the stored copy of a News document (lean or hydrated). */
 bookmarkSchema.statics.snapshotFrom = function (article) {
   const data = typeof article.toObject === "function" ? article.toObject() : article;
-  return {
-    ...data,
-    topicLabel: TOPIC_LABELS[data.topic] || data.category || "Misc",
-  };
+  return withTopicLabels(data);
 };
 
 /**

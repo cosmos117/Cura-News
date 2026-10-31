@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { istDayKey, istDayRange } from "../utils/date.js";
 import { NEWS_CATEGORIES, DEFAULT_CATEGORY } from "../utils/category.js";
-import { TOPIC_IDS, TOPIC_LABELS } from "../config/topics.js";
+import { TOPICS, TOPIC_IDS, TOPIC_LABELS, TOPIC_ID_BY_LABEL, withTopicLabels } from "../config/topics.js";
 
 const DETAILED_STATUSES = [
   "NONE",
@@ -316,11 +316,67 @@ newsSchema.index({ headline: "text", summary: "text" });
  * @returns {Object} - News object
  */
 newsSchema.methods.getPublicNews = function () {
-  const data = this.toObject();
-  return {
-    ...data,
-    topicLabel: TOPIC_LABELS[data.topic] || data.category || "Misc",
-  };
+  return withTopicLabels(this.toObject());
+};
+
+// ---------------------------------------------------------------------------
+// One topic per article
+//
+// `topic` is decided once, when the article is collected, and `category` is
+// always its label. Nothing may change either afterwards: the detailed
+// summary's AI used to overwrite `category` with its own guess, so a story's
+// topic changed the moment someone opened its explainer.
+// ---------------------------------------------------------------------------
+
+const TOPIC_FIELDS = ["topic", "category"];
+
+newsSchema.pre("validate", function (next) {
+  if (!this.isNew && TOPIC_FIELDS.some((field) => this.isModified(field))) {
+    this.invalidate("topic", "An article's topic is set when it is collected and cannot change");
+    return next();
+  }
+  // Keep the pair consistent, whichever one the caller supplied.
+  if (!TOPIC_LABELS[this.topic]) {
+    this.topic = TOPIC_ID_BY_LABEL[this.category] || "misc";
+  }
+  this.category = TOPIC_LABELS[this.topic];
+  next();
+});
+
+/** Drop topic fields from an update, unless the query opts in. */
+const stripTopicChanges = function (next) {
+  if (this.getOptions().allowTopicChange) return next();
+  const update = this.getUpdate();
+  if (!update) return next();
+  for (const target of [update, update.$set, update.$unset, update.$setOnInsert]) {
+    if (!target || typeof target !== "object") continue;
+    for (const field of TOPIC_FIELDS) delete target[field];
+  }
+  next();
+};
+for (const op of ["updateOne", "updateMany", "findOneAndUpdate", "replaceOne"]) {
+  newsSchema.pre(op, stripTopicChanges);
+}
+
+/**
+ * Repair rows written before topics were locked: set every category to its
+ * topic's label, and give topic-less rows the topic their category names.
+ * Safe to run on every start.
+ * @returns {Promise<number>} rows changed
+ */
+newsSchema.statics.syncCategoryWithTopic = async function () {
+  const opts = { allowTopicChange: true };
+  const results = await Promise.all(
+    TOPICS.flatMap(({ id, label }) => [
+      this.updateMany({ topic: id, category: { $ne: label } }, { $set: { category: label } }, opts),
+      this.updateMany(
+        { topic: { $nin: TOPIC_IDS }, category: label },
+        { $set: { topic: id } },
+        opts,
+      ),
+    ]),
+  );
+  return results.reduce((sum, result) => sum + (result.modifiedCount || 0), 0);
 };
 
 /**
