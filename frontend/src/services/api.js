@@ -37,6 +37,11 @@ export const meAPI = {
   deleteAccount: (body) => apiClient.delete("/me", { data: body }),
 };
 
+// Public usage totals for the landing page.
+export const statsAPI = {
+  get: () => apiClient.get("/stats"),
+};
+
 export const bookmarkAPI = {
   getAll: (params) => apiClient.get("/bookmarks", { params }),
   // The saved copy of an article; still readable after the article is deleted.

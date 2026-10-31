@@ -1,0 +1,183 @@
+/* ========================= 17. SETTINGS ========================= */
+
+.settings {
+  display: grid;
+  gap: var(--space-6);
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.settings__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-headline);
+  font-size: var(--text-2xl);
+}
+
+.settings-card {
+  padding: var(--space-6);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  animation: onb-rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.settings > :nth-child(3) { animation-delay: 70ms; }
+.settings > :nth-child(4) { animation-delay: 140ms; }
+
+.settings-card__title {
+  margin-bottom: var(--space-2);
+  font-family: var(--font-headline);
+  font-size: var(--text-xl);
+  font-weight: 800;
+}
+
+.settings-card__hint {
+  margin-bottom: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.settings__picks {
+  margin-bottom: var(--space-4);
+}
+
+.settings-card--danger {
+  border-color: var(--red-200);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--red-50) 100%);
+}
+
+.settings-card--danger .settings-card__title {
+  color: var(--red-700);
+}
+
+.profile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.profile__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-headline);
+  font-size: var(--text-xl);
+  font-weight: 800;
+  box-shadow: var(--shadow-md);
+}
+
+.profile__details {
+  display: grid;
+  flex: 1;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.profile__name {
+  font-family: var(--font-headline);
+  font-size: var(--text-lg);
+  font-weight: 800;
+}
+
+.profile__email {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.pick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.pick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--paper-deep);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+/* Confirmation dialog (Settings > Delete account). */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: rgba(45, 38, 32, 0.45);
+  animation: modal-fade 0.2s ease both;
+}
+
+.modal {
+  width: 100%;
+  max-width: 420px;
+  padding: var(--space-8) var(--space-6) var(--space-6);
+  text-align: center;
+  background: var(--paper-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  animation: modal-in 0.28s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+}
+
+.modal__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-full);
+  background: var(--red-100);
+  color: var(--red-600);
+}
+
+.modal__title {
+  font-family: var(--font-headline);
+  font-size: var(--text-xl);
+  font-weight: 800;
+}
+
+.modal__text {
+  margin: var(--space-2) 0 var(--space-5);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.modal .alert {
+  margin-bottom: var(--space-4);
+  text-align: left;
+}
+
+.modal__actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.modal__actions .btn {
+  flex: 1;
+}
+
+@keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(12px) scale(0.94); } to { opacity: 1; transform: none; } }

@@ -65,6 +65,19 @@ export const formatToday = () =>
   });
 
 /**
+ * Time left before a bookmark expires, e.g. "Expires in 5h" or "Expires in 12m".
+ */
+export const formatExpiry = (value) => {
+  if (!value) return "";
+  const msLeft = new Date(value).getTime() - Date.now();
+  if (!Number.isFinite(msLeft)) return "";
+  if (msLeft <= 0) return "Expired";
+  const minutes = Math.ceil(msLeft / 60000);
+  if (minutes < 60) return `Expires in ${minutes}m`;
+  return `Expires in ${Math.floor(minutes / 60)}h`;
+};
+
+/**
  * Extract an error message from an axios rejection.
  *
  * A network-level failure (backend down, wrong base URL, CORS block) produces
@@ -78,20 +91,7 @@ export const formatToday = () =>
  * @param {string} fallback - Message to use when none can be derived
  * @returns {string} - A user-facing message
  */
-/**
- * Time left before a bookmark expires, e.g. "Expires in 5h" or "Expires in 12m".
- */
-export const formatExpiry = (value) => {
-  if (!value) return "";
-  const msLeft = new Date(value).getTime() - Date.now();
-  if (!Number.isFinite(msLeft)) return "";
-  if (msLeft <= 0) return "Expired";
-  const minutes = Math.ceil(msLeft / 60000);
-  if (minutes < 60) return `Expires in ${minutes}m`;
-  return `Expires in ${Math.floor(minutes / 60)}h`;
-};
-
-export const getErrorMessage =(error, fallback = "Something went wrong") => {
+export const getErrorMessage = (error, fallback = "Something went wrong") => {
   if (!error?.response) {
     if (error?.code === "ECONNABORTED" || error?.code === "ETIMEDOUT") {
       return "The server took too long to respond. Please try again.";

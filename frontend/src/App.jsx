@@ -15,7 +15,6 @@ import Landing from "./pages/Landing";
 import Bookmarks from "./pages/Bookmarks";
 import Onboarding from "./pages/Onboarding";
 import Settings from "./pages/Settings";
-import "./index.css";
 
 const FullPageSpinner = ({ label = "Loading..." }) => (
   <div className="page page--centered">

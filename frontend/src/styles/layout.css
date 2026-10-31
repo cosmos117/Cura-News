@@ -1,0 +1,141 @@
+/* ========================= 3. LAYOUT PRIMITIVES ========================= */
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.page--centered {
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-12) var(--space-4);
+}
+
+.container {
+  width: 100%;
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
+.container--narrow {
+  max-width: var(--container-narrow);
+}
+
+.page-body {
+  flex: 1;
+  padding-block: var(--space-8);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+}
+.stack-3 { gap: var(--space-3); }
+.stack-4 { gap: var(--space-4); }
+.stack-6 { gap: var(--space-6); }
+.stack-8 { gap: var(--space-8); }
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.row-1 { gap: var(--space-1); }
+.row-2 { gap: var(--space-2); }
+.row-3 { gap: var(--space-3); }
+
+.row--wrap { flex-wrap: wrap; }
+.row--between { justify-content: space-between; }
+.row--center { justify-content: center; }
+
+.grid-cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-6);
+}
+
+/* Card view: two cards per row. The line view keeps the single-column base
+   rule, so an article always occupies one full row there. */
+.grid-cards--cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Pagination controls under the results list. */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+}
+
+.pagination__status {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.pagination__range {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--gray-500);
+}
+
+.pagination__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--gray-100);
+  color: var(--gray-800);
+  font-weight: 600;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.pagination__btn:hover:not(:disabled) {
+  background: var(--gray-200);
+}
+
+.pagination__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Anchor for the results list. Clears the sticky site header when the view
+   scrolls to it after a page change. */
+.results-anchor {
+  scroll-margin-top: 6rem;
+}
+
+.spacer {
+  margin-left: auto;
+}
+
+.icon {
+  flex-shrink: 0;
+}
+
+.icon--sm { width: 14px; height: 14px; }
+.icon--md { width: 18px; height: 18px; }
+.icon--lg { width: 20px; height: 20px; }
+.icon--xl { width: 24px; height: 24px; }
+.icon--2xl { width: 48px; height: 48px; }
+
+/* Screen-reader-only text, e.g. fieldset legends. */
+
+/* Line clamping */
+.line-clamp-1,
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-1 { -webkit-line-clamp: 1; }
+.line-clamp-3 { -webkit-line-clamp: 3; }

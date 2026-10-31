@@ -1,0 +1,527 @@
+/* ========================= 15. FOR YOU PICKER (ONBOARDING) ========================= */
+/* Two steps (papers, then topics) that slide in turn, then an "all set" screen.
+   Every animation here is switched off by the prefers-reduced-motion block. */
+
+.onb {
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(16px, 5vh, 56px) var(--space-4) var(--space-12);
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(255, 255, 255, 0.75), transparent 55%),
+    radial-gradient(ellipse at 92% 100%, rgba(30, 58, 95, 0.1), transparent 55%),
+    var(--paper);
+}
+
+.onb__panel {
+  width: 100%;
+  max-width: 800px;
+  background: var(--paper-card);
+  border: 1px solid var(--border);
+  border-top: 4px double var(--ink);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  animation: onb-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.onb__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-8) 0;
+}
+
+.onb__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--font-headline);
+  font-size: var(--text-lg);
+  font-weight: 800;
+}
+
+.onb__brand img {
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.onb__step-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.onb__progress {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-8) 0;
+}
+
+.onb__progress span {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--paper-deep);
+}
+
+.onb__progress span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--ink);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.onb__progress .is-filled::after {
+  transform: scaleX(1);
+  animation: onb-fill 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Clips the sideways slide between steps. */
+.onb__body {
+  padding: var(--space-8);
+  min-height: 460px;
+  overflow: hidden;
+}
+
+.onb-step--enter-next { animation: onb-in-next 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.onb-step--enter-back { animation: onb-in-back 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.onb-step--leave-next { animation: onb-out-next 0.2s ease-in both; }
+.onb-step--leave-back { animation: onb-out-back 0.2s ease-in both; }
+
+.onb__title {
+  font-family: var(--font-headline);
+  font-size: var(--text-3xl);
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.onb__title:focus {
+  outline: none;
+}
+
+.onb__lead {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Cards and chips rise in one after another (--i is the item index). */
+.onb-cell {
+  animation: onb-rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 40ms + 120ms);
+}
+
+.onb-source:focus-visible,
+.onb-topic:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* --- Step 1: papers --- */
+
+.onb-sources {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+  margin-top: var(--space-6);
+}
+
+.onb-source {
+  /* Rapid clicks must not select the label text. */
+  user-select: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  height: 100%;
+  padding: var(--space-4);
+  text-align: left;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    box-shadow 0.25s ease,
+    transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.onb-source:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--blue-500);
+}
+
+.onb-source--selected {
+  border-color: var(--ink);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(45, 38, 32, 0.1), var(--shadow-lg);
+  animation: onb-press 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.onb-source__logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88px;
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* Unpicked papers sit in greyscale; picking one brings its colours back. */
+.onb-source__logo img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  filter: grayscale(1);
+  opacity: 0.55;
+  transition:
+    filter 0.35s ease,
+    opacity 0.35s ease,
+    transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.onb-source--selected .onb-source__logo img {
+  filter: none;
+  opacity: 1;
+  transform: scale(1.05);
+}
+
+.onb-source__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.onb-source__name {
+  font-family: var(--font-headline);
+  font-size: var(--text-lg);
+  font-weight: 800;
+}
+
+.onb-source__meta {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.onb-source__text {
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.onb-check {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--paper-card);
+  border-radius: var(--radius-full);
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: var(--shadow-md);
+  animation: onb-pop 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* --- Step 2: topics --- */
+
+.onb-topics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.onb-topic {
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  text-align: left;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-full);
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    color 0.25s ease,
+    box-shadow 0.25s ease,
+    transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.onb-topic:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--blue-500);
+}
+
+/* The icon chip keeps the dashboard per-topic colours (.topic-card--*). */
+.onb-topic .topic-card__icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.onb-topic--selected {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+  box-shadow: var(--shadow-lg);
+  animation: onb-press 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.onb-topic--selected .topic-card__icon {
+  transform: rotate(-10deg) scale(1.1);
+}
+
+.onb-topic__label {
+  flex: 1;
+  line-height: 1.25;
+}
+
+.onb-topic__tick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-full);
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.onb-topic--selected .onb-topic__tick {
+  background: var(--paper);
+  border-color: var(--paper);
+  color: var(--ink);
+}
+
+.onb-topic--selected .onb-topic__tick svg {
+  animation: onb-pop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.onb-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.onb-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Re-keyed on every change, so the number bumps each time. */
+.onb-count__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  animation: onb-bump 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.onb__error {
+  margin-top: var(--space-5);
+}
+
+/* Stays in reach at the bottom of the screen on long lists. */
+.onb__footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-8);
+  background: var(--paper-card);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.onb__next {
+  min-width: 170px;
+}
+
+/* --- Done --- */
+
+.onb-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding-block: var(--space-6);
+  text-align: center;
+}
+
+.onb-done__mark {
+  width: 104px;
+  height: 104px;
+}
+
+.onb-done__mark circle {
+  fill: var(--ink);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: onb-ring 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* pathLength="1" on the path, so a dash of 1 is the whole tick. */
+.onb-done__mark path {
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: onb-draw 0.5s 0.35s ease-out forwards;
+}
+
+.onb-done__picks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  max-width: 600px;
+}
+
+.onb-done__chip {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--paper-deep);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  animation: onb-rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 45ms + 500ms);
+}
+
+@keyframes onb-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes onb-in-next { from { opacity: 0; transform: translateX(48px); } to { opacity: 1; transform: none; } }
+@keyframes onb-in-back { from { opacity: 0; transform: translateX(-48px); } to { opacity: 1; transform: none; } }
+@keyframes onb-out-next { to { opacity: 0; transform: translateX(-48px); } }
+@keyframes onb-out-back { to { opacity: 0; transform: translateX(48px); } }
+@keyframes onb-pop {
+  0% { opacity: 0; transform: scale(0.3); }
+  60% { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes onb-press {
+  0% { transform: scale(1); }
+  30% { transform: scale(0.95); }
+  65% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+@keyframes onb-bump { 0%, 100% { transform: scale(1); } 45% { transform: scale(1.3); } }
+@keyframes onb-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes onb-ring { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+@keyframes onb-draw { to { stroke-dashoffset: 0; } }
+
+@media (max-width: 720px) {
+  .onb {
+    align-items: stretch;
+    padding: 0;
+  }
+  .onb__panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    border-inline: 0;
+    border-radius: 0;
+  }
+  .onb__top,
+  .onb__progress {
+    padding-inline: var(--space-4);
+  }
+  .onb__body {
+    flex: 1;
+    min-height: 0;
+    padding: var(--space-6) var(--space-4);
+  }
+  .onb__footer {
+    padding: var(--space-3) var(--space-4);
+    border-radius: 0;
+  }
+  .onb__next {
+    flex: 1;
+    min-width: 0;
+  }
+  .onb__title {
+    font-size: var(--text-2xl);
+  }
+  .onb-sources {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+  .onb-source {
+    flex-direction: row;
+    align-items: center;
+    padding: var(--space-3);
+  }
+  .onb-source__logo {
+    width: 104px;
+    height: 60px;
+    flex-shrink: 0;
+  }
+  .onb-source__text {
+    display: none;
+  }
+  .onb-topics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+  .onb-topic {
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-lg);
+  }
+  .onb-topic .topic-card__icon {
+    width: 30px;
+    height: 30px;
+  }
+  .onb-topic__tick {
+    display: none;
+  }
+}

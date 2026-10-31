@@ -1,0 +1,15 @@
+/* ========================= 18. DETAILED-SUMMARY READY MARKS ========================= */
+
+.article-card__badges {
+  flex-wrap: wrap;
+}
+
+.detailed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.tab__ready {
+  color: var(--green-600);
+}

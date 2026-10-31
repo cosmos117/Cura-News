@@ -1,0 +1,19 @@
+/* ========================= 19. HEADER HIDES ON SCROLL ========================= */
+/* The dashboard header slides out of view while the reader scrolls down and
+   back when they scroll up (see hooks/useHideOnScroll.js). It also returns
+   when a keyboard user tabs into it. */
+.site-header--autohide {
+  transition:
+    transform 0.3s ease,
+    box-shadow 0.3s ease;
+}
+
+.site-header--hidden {
+  transform: translateY(-100%);
+  box-shadow: none;
+}
+
+.site-header--hidden:focus-within {
+  transform: none;
+  box-shadow: var(--shadow-md);
+}

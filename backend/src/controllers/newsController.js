@@ -1,336 +1,14 @@
 import News from "../models/News.js";
 import { AppError, asyncHandler } from "../middleware/errorHandler.js";
-import { istDayKey, istDayRange } from "../utils/date.js";
 import { NEWS_CATEGORIES } from "../utils/category.js";
-import { TOPICS, TOPIC_LABELS } from "../config/topics.js";
-import User from "../models/User.js";
-import { config } from "../config/env.js";
-import { RATE_LIMITED_MESSAGE } from "../services/aiService.js";
 import {
-  dailyDetailedCount,
-  generateDetailedSummary,
-  detailedConfig,
-} from "../services/detailedSummaryService.js";
-
-const VALID_SOURCES = ["The Hindu", "Indian Express", "Times of India"];
-const VALID_TAGS = [
-  "Polity",
-  "Economy",
-  "Defense",
-  "Science",
-  "International",
-];
-const VALID_TOPIC_VALUES = TOPICS.flatMap((topic) => [topic.id, topic.label]);
-const LEGACY_CATEGORY_TOPIC = {
-  Politics: "politics-governance",
-  Business: "economy-business",
-  Sports: "sports",
-  Tech: "science-technology",
-  World: "world-affairs",
-  Entertainment: "entertainment",
-  Other: "misc",
-};
-
-/**
- * Split a comma-separated query value into a clean array.
- * @param {string|string[]} value
- * @returns {string[]}
- */
-const parseList = (value) => {
-  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
-  return String(value ?? "")
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean);
-};
-
-/**
- * Validate a list against an allowed set, rejecting rather than silently
- * dropping unknown values. Silently ignoring them makes a typo look exactly
- * like "no articles matched", which is indistinguishable from an empty result.
- * @param {string[]} values
- * @param {string[]} allowed
- * @param {string} label
- * @returns {string[]}
- */
-const validateList = (values, allowed, label) => {
-  const invalid = values.filter((v) => !allowed.includes(v));
-  if (invalid.length > 0) {
-    throw new AppError(
-      `Invalid ${label}: ${invalid.join(", ")}. Valid values: ${allowed.join(", ")}`,
-      400,
-    );
-  }
-  return values;
-};
-
-/**
- * Build the Mongo filter for the article list.
- *
- * Every filter dimension is applied here in one place, which is what makes
- * search + category + source + tags combine as an AND rather than each filter
- * overwriting the last.
- *
- * @param {Object} options
- * @param {string} [options.search] - Full-text term (min 3 chars)
- * @param {string[]} [options.tags]
- * @param {string[]} [options.categories]
- * @param {string[]} [options.sources]
- * @param {boolean} [options.includeCategory] - Set false to compute facet
- *   counts, so the topic cards keep showing the other categories' counts while
- *   one category is selected.
- * @returns {Object} - Mongo filter
- */
-const buildArticleFilter = ({
-  search,
-  tags = [],
-  categories = [],
-  legacyCategories = [],
-  topics = [],
-  sources = [],
-  includeCategory = true,
-} = {}) => {
-  const filter = {
-    isPublished: true,
-    $or: [
-      { publishedDayKey: istDayKey() },
-      { publishedDayKey: { $exists: false }, publishedAt: istDayRange() },
-    ],
-  };
-
-  const term = search?.trim();
-  if (term) {
-    if (term.length < 3) {
-      throw new AppError("Search query must be at least 3 characters", 400);
-    }
-    filter.$text = { $search: term };
-  }
-
-  if (tags.length > 0) {
-    filter.tags = { $in: tags };
-  }
-
-  if (includeCategory && categories.length > 0) {
-    filter.category = { $in: categories };
-  }
-  if (includeCategory && legacyCategories.length > 0) {
-    filter.category = { $in: legacyCategories };
-  }
-  if (topics.length > 0) {
-    filter.topic = { $in: topics };
-  }
-
-  if (sources.length > 0) {
-    filter.source = { $in: sources };
-  }
-
-  return filter;
-};
-
-/**
- * Count articles per value for one field, over the given filter.
- * @param {Object} filter - Base Mongo filter
- * @param {string} field - Field to group by
- * @param {boolean} [unwind] - Unwind an array field (tags) before grouping
- * @returns {Promise<Object>} - { value: count }
- */
-const facetCounts = async (filter, field, unwind = false) => {
-  const pipeline = [{ $match: filter }];
-  if (unwind) pipeline.push({ $unwind: `$${field}` });
-  pipeline.push({ $group: { _id: `$${field}`, count: { $sum: 1 } } });
-
-  const rows = await News.aggregate(pipeline);
-  return rows.reduce((acc, row) => {
-    if (row._id) acc[row._id] = row.count;
-    return acc;
-  }, {});
-};
-
-const topicFacetCounts = async (filter) => {
-  const rows = await News.aggregate([
-    { $match: filter },
-    {
-      $project: {
-        topic: {
-          $switch: {
-            branches: [
-              ...TOPICS.filter((topic) => topic.id !== "misc").map((topic) => ({
-                case: { $eq: ["$topic", topic.id] },
-                then: topic.id,
-              })),
-              ...Object.entries(LEGACY_CATEGORY_TOPIC).map(([category, topic]) => ({
-                case: { $eq: ["$category", category] },
-                then: topic,
-              })),
-            ],
-            default: "misc",
-          },
-        },
-      },
-    },
-    { $group: { _id: "$topic", count: { $sum: 1 } } },
-  ]);
-  return rows.reduce((acc, row) => {
-    acc[row._id] = row.count;
-    return acc;
-  }, {});
-};
-
-/**
- * Get today's news with combined filtering
- * GET /api/news/today?search=parliament&category=Politics&source=The%20Hindu
- *
- * All parameters are optional and are ANDed together, so search + category +
- * source + tags narrow the result set together.
- *
- * @param {Object} req - Express request object
- * @param {string} [req.query.search] - Full-text search (min 3 chars)
- * @param {string} [req.query.tag] - Optional: single tag (legacy alias)
- * @param {string} [req.query.tags] - Optional: comma-separated tags
- * @param {string} [req.query.category] - Optional: comma-separated categories
- * @param {string} [req.query.source] - Optional: comma-separated sources
- * @param {number} [req.query.limit] - Optional: number of results (default: 10, max: 50)
- * @param {number} [req.query.skip] - Optional: pagination offset (default: 0)
- * @param {Object} res - Express response object
- * @returns {Object} - { success, pagination, facets, data: [news articles] }
- */
-export const getTodayNews = asyncHandler((req, res) => sendFeed(req, res));
-
-/**
- * The reader's personalised feed: today's news from the sources AND topics
- * they picked. The same query parameters as getTodayNews narrow it further.
- * GET /api/news/for-you
- *
- * Answers 409 when the reader has not picked yet, so the client can offer
- * the picker instead of an empty feed.
- */
-export const getForYouNews = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user.userId).select("preferences");
-  const { sources = [], topics = [] } = user?.preferences || {};
-  if (!sources.length || !topics.length) {
-    throw new AppError("Pick your sources and topics to see your feed", 409);
-  }
-
-  return sendFeed(req, res, {
-    sources: [...sources],
-    categories: topics.map((id) => TOPIC_LABELS[id]).filter(Boolean),
-  });
-});
-
-/**
- * Shared by both feeds. `scope`, when given, bounds the result to those
- * sources and categories: the card filters can narrow inside it, never
- * widen past it.
- */
-const sendFeed = async (req, res, scope = null) => {
-  const { tag, tags, category, topic, source, search, limit = 10, skip = 0 } = req.query;
-
-  // Validate and sanitize limit
-  const parsedLimit = Math.min(parseInt(limit) || 10, 100);
-  const parsedSkip = Math.max(parseInt(skip) || 0, 0);
-
-  const selectedTags = validateList(
-    [...parseList(tags), ...parseList(tag)],
-    VALID_TAGS,
-    "tags",
-  );
-  const requestedCategories = parseList(category);
-  const requestedTopics = parseList(topic).map(
-    (value) => TOPICS.find((item) => item.id === value || item.label === value)?.label || value,
-  );
-  const legacyCategoryAliases = {
-    Politics: "Politics & Governance",
-    Business: "Economy & Business",
-    Tech: "Science & Technology",
-    World: "World Affairs",
-  };
-  const selectedCategories = validateList(
-    [...requestedTopics, ...requestedCategories].map(
-      (value) => legacyCategoryAliases[value] || value,
-    ),
-    NEWS_CATEGORIES,
-    "category",
-  );
-  const requestedSources = validateList(
-    parseList(source),
-    VALID_SOURCES,
-    "source",
-  );
-
-  const withinScope = (selected, allowed) =>
-    selected.length ? selected.filter((value) => allowed.includes(value)) : allowed;
-  const categories = scope
-    ? withinScope(selectedCategories, scope.categories)
-    : selectedCategories;
-  const selectedSources = scope
-    ? withinScope(requestedSources, scope.sources)
-    : requestedSources;
-
-  const filter = buildArticleFilter({
-    search,
-    tags: selectedTags,
-    categories,
-    legacyCategories: [],
-    sources: selectedSources,
-  });
-
-  // Facet counts come from the same filter MINUS the category constraint, so
-  // every topic card still shows what it would yield if selected.
-  const facetFilter = buildArticleFilter({
-    search,
-    tags: selectedTags,
-    sources: selectedSources,
-    includeCategory: false,
-  });
-
-  if (scope) {
-    // Set explicitly: buildArticleFilter skips empty lists, but a card filter
-    // outside the reader's picks must match nothing, not everything.
-    filter.category = { $in: categories };
-    filter.source = { $in: selectedSources };
-    facetFilter.category = { $in: scope.categories };
-    facetFilter.source = { $in: selectedSources };
-  }
-
-  const [totalCount, news, byCategory, bySource, byTag] = await Promise.all([
-    News.countDocuments(filter),
-    News.find(filter)
-      .sort({ date: -1 })
-      .limit(parsedLimit)
-      .skip(parsedSkip)
-      .exec(),
-    facetCounts(facetFilter, "category"),
-    facetCounts(facetFilter, "source"),
-    facetCounts(facetFilter, "tags", true),
-  ]);
-
-  // Serialize through the public shape
-  const publicNews = news.map((article) => article.getPublicNews());
-
-  res.status(200).json({
-    success: true,
-    message: `Found ${news.length} news articles for today`,
-    pagination: {
-      total: totalCount,
-      limit: parsedLimit,
-      skip: parsedSkip,
-      hasMore: totalCount > parsedSkip + parsedLimit,
-    },
-    // Every category is present, including zero-count ones, so the chip bar
-    // does not reflow as filters change.
-    facets: {
-      byCategory: NEWS_CATEGORIES.reduce((acc, categoryName) => {
-        acc[categoryName] = byCategory[categoryName] || 0;
-        return acc;
-      }, {}),
-      bySource: Object.fromEntries(
-        VALID_SOURCES.map((s) => [s, bySource[s] || 0]),
-      ),
-      byTag: Object.fromEntries(VALID_TAGS.map((t) => [t, byTag[t] || 0])),
-    },
-    data: publicNews,
-  });
-};
+  VALID_SOURCES,
+  VALID_TAGS,
+  assertArticleId,
+  paginationOf,
+  parsePagination,
+  todayFilter,
+} from "../utils/newsQuery.js";
 
 /**
  * Get a single news article by ID
@@ -343,11 +21,7 @@ const sendFeed = async (req, res, scope = null) => {
  */
 export const getNewsByID = asyncHandler(async (req, res, next) => {
   const { id } = req.params;
-
-  // Validate ID format
-  if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
-    throw new AppError("Invalid news ID format", 400);
-  }
+  assertArticleId(id);
 
   // Find news article
   const news = await News.findById(id);
@@ -364,289 +38,6 @@ export const getNewsByID = asyncHandler(async (req, res, next) => {
     success: true,
     message: "News article retrieved successfully",
     data: news.getPublicNews(),
-  });
-});
-
-/**
- * Answer a detailed request that hit an AI rate limit. The article goes back
- * to NONE rather than FAILED, since nothing is wrong with it, and the reply
- * says when capacity is expected back so the client can retry on its own.
- */
-const respondRateLimited = async (res, id, retryAfterMs) => {
-  const available = await News.findByIdAndUpdate(
-    id,
-    {
-      $set: {
-        detailedStatus: "NONE",
-        detailedLockedAt: null,
-        lastError: RATE_LIMITED_MESSAGE,
-      },
-    },
-    { new: true, runValidators: true },
-  );
-  if (!available) throw new AppError("News article not found", 404);
-
-  const retryAfter = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : null;
-  if (retryAfter) res.set("Retry-After", String(Math.ceil(retryAfter / 1000)));
-  return res.status(429).json({
-    success: false,
-    message: "AI providers are busy right now. Please try again shortly.",
-    retryAfterMs: retryAfter,
-    data: available.getPublicNews(),
-  });
-};
-
-/**
- * Generate or return the cached detailed summary for an article.
- * POST /api/news/:id/detailed
- */
-export const generateDetailedNews = asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
-      throw new AppError("Invalid news ID format", 400);
-    }
-
-    const article = await News.findOne({ _id: id, isPublished: true });
-    if (!article) throw new AppError("News article not found", 404);
-
-    const hasValidatedFullSource =
-      article.detailSourceType === "FULL_TEXT" &&
-      Number(article.sourceWordCount) >= 120;
-
-    if (
-      article.detailedStatus === "DONE" &&
-      article.detailedSummary &&
-      hasValidatedFullSource
-    ) {
-      return res.status(200).json({
-        success: true,
-        message: "Detailed summary retrieved from cache",
-        data: article.getPublicNews(),
-      });
-    }
-
-    // Discard summaries created before the full-source-only flow. They may
-    // have been generated from an RSS snippet or an unclean webpage extract.
-    if (article.detailedStatus === "DONE" && !hasValidatedFullSource) {
-      await News.updateOne(
-        { _id: id },
-        {
-          $set: { detailedStatus: "NONE", detailedLockedAt: null },
-          $unset: {
-            detailedSummary: 1,
-            detailedGeneratedAt: 1,
-            detailedConfidence: 1,
-            detailSourceType: 1,
-            sourceWordCount: 1,
-            sourceTier: 1,
-          },
-        },
-      );
-      article.detailedStatus = "NONE";
-      article.detailedSummary = null;
-    }
-
-    if (article.detailedStatus === "PENDING") {
-      const lockAge = Date.now() - (article.detailedLockedAt?.getTime() || 0);
-      if (lockAge < 2 * 60 * 1000) {
-        return res.status(202).json({
-          success: true,
-          message: "Generating detailed summary...",
-          data: article.getPublicNews(),
-        });
-      }
-      await News.updateOne(
-        { _id: id, detailedStatus: "PENDING" },
-        { $set: { detailedStatus: "NONE", detailedLockedAt: null } },
-      );
-    }
-
-    let locked;
-    try {
-      const generatedToday = await dailyDetailedCount();
-      if (generatedToday >= detailedConfig.AI_DAILY_LIMIT) {
-        return res.status(429).json({
-          success: false,
-          message: "Detailed summary will be available soon",
-        });
-      }
-
-      locked = await News.findOneAndUpdate(
-        {
-          _id: id,
-          isPublished: true,
-          detailedStatus: { $in: ["NONE", "FAILED", "UNAVAILABLE"] },
-        },
-        { $set: { detailedStatus: "PENDING", detailedLockedAt: new Date() } },
-        { new: true },
-      );
-    } catch (error) {
-      console.error("Detailed summary request setup failed:", {
-        articleId: id,
-        message: error.message,
-      });
-      return res.status(503).json({
-        success: false,
-        message: "Detailed summary service is temporarily unavailable. Please try again.",
-      });
-    }
-
-    if (!locked) {
-      const current = await News.findById(id);
-      return res.status(202).json({
-        success: true,
-        message:
-          current?.detailedStatus === "DONE"
-            ? "Detailed summary retrieved from cache"
-            : "Generating detailed summary...",
-        data: current?.getPublicNews(),
-      });
-    }
-
-    let result;
-    try {
-      result = await generateDetailedSummary(locked, { priority: "interactive" });
-    } catch (error) {
-      console.error("Detailed summary generation failed:", {
-        articleId: id,
-        message: error.message,
-      });
-
-      if (error.statusCode === 429) {
-        return respondRateLimited(res, id, error.retryAfterMs);
-      }
-
-      const failed = await News.findByIdAndUpdate(
-        id,
-        {
-          $set: {
-            detailedStatus: "FAILED",
-            detailedLockedAt: null,
-            detailSourceType: "SNIPPET_ONLY",
-            lastError: String(error.message || "Detailed summary generation failed").slice(0, 500),
-          },
-          $unset: {
-            detailedSummary: 1,
-            detailedGeneratedAt: 1,
-            detailedConfidence: 1,
-          },
-        },
-        { new: true, runValidators: true },
-      );
-
-      if (!failed) throw new AppError("News article not found", 404);
-      return res.status(422).json({
-        success: false,
-        message: "Detailed summary generation failed. Please try again.",
-        data: failed.getPublicNews(),
-      });
-    }
-
-    if (result.status === "RATE_LIMITED") {
-      return respondRateLimited(res, id, result.retryAfterMs);
-    }
-
-    // Normalise the result status so any unexpected value is treated as a
-    // failure rather than falling through with inconsistent state.
-    const status = result.status === "DONE" ? "DONE" : result.status === "FAILED" ? "FAILED" : "UNAVAILABLE";
-
-    const update = {
-      detailedStatus: status,
-      detailSourceType: result.detailSourceType ?? "SNIPPET_ONLY",
-      detailedLockedAt: null,
-    };
-
-    if (status === "DONE") {
-      // v2: the detailed narrative never rewrites the headline; it only
-      // fills the detailed fields and may refine tags/category.
-      update.detailedSummary = result.detailed;
-      update.detailedConfidence = result.confidence;
-      update.detailedGeneratedAt = new Date();
-      update.category = result.category;
-      update.tags = result.tags?.length > 0 ? result.tags : locked.tags;
-      update.promptVersion = result.promptVersion;
-      update.sourceWordCount = result.sourceWordCount;
-      if (result.sourceTier) update.sourceTier = result.sourceTier;
-      update.$unset = {
-        lastError: 1,
-      };
-    } else {
-      // FAILED or UNAVAILABLE: clear the detailed narrative and record why.
-      // Use $unset (not `undefined`) so Mongoose never tries to validate an
-      // undefined value against the String field.
-      update.$unset = {
-        detailedSummary: 1,
-        detailedGeneratedAt: 1,
-        detailedConfidence: 1,
-      };
-      update.lastError = (
-        result.reason ||
-        (status === "UNAVAILABLE"
-          ? "Detailed summary is unavailable. Read the full story at the source."
-          : "Detailed summary generation failed")
-      ).slice(0, 500);
-      update.$unset.sourceTier = 1;
-    }
-
-    let saved;
-    try {
-      saved = await News.findByIdAndUpdate(id, update, {
-        new: true,
-        runValidators: true,
-      });
-    } catch (error) {
-      console.error("Detailed summary persistence failed:", {
-        articleId: id,
-        message: error.message,
-      });
-
-      try {
-        saved = await News.findByIdAndUpdate(
-          id,
-          {
-            $set: {
-              detailedStatus: "FAILED",
-              detailSourceType: "SNIPPET_ONLY",
-              lastError: "Detailed summary could not be saved",
-            },
-            $unset: {
-              detailedSummary: 1,
-              detailedGeneratedAt: 1,
-              detailedConfidence: 1,
-              sourceTier: 1,
-            },
-          },
-          { new: true, runValidators: true },
-        );
-      } catch (fallbackError) {
-        console.error("Detailed summary failure state could not be saved:", {
-          articleId: id,
-          message: fallbackError.message,
-        });
-        return res.status(503).json({
-          success: false,
-          message: "Detailed summary service is temporarily unavailable. Please try again.",
-        });
-      }
-
-      if (!saved) throw new AppError("News article not found", 404);
-      return res.status(422).json({
-        success: false,
-        message: "Detailed summary could not be saved. Please try again.",
-        data: saved.getPublicNews(),
-      });
-    }
-    if (!saved) throw new AppError("News article not found", 404);
-
-    return res.status(status === "DONE" ? 200 : 422).json({
-      success: status !== "FAILED",
-      message:
-        status === "DONE"
-          ? "Detailed summary generated"
-          : status === "UNAVAILABLE"
-            ? "Detailed summary is unavailable. Read the full story at the source."
-            : "Detailed summary generation failed. Please try again.",
-      data: saved.getPublicNews(),
   });
 });
 
@@ -778,7 +169,6 @@ export const createNews = asyncHandler(async (req, res, next) => {
  */
 export const getNewsByTag = asyncHandler(async (req, res, next) => {
   const { tagName } = req.params;
-  const { limit = 10, skip = 0 } = req.query;
 
   // Validate tag
   if (!VALID_TAGS.includes(tagName)) {
@@ -788,8 +178,7 @@ export const getNewsByTag = asyncHandler(async (req, res, next) => {
     );
   }
 
-  const parsedLimit = Math.min(parseInt(limit) || 10, 50);
-  const parsedSkip = Math.max(parseInt(skip) || 0, 0);
+  const page = parsePagination(req.query, 50);
 
   const totalCount = await News.countDocuments({
     tags: tagName,
@@ -798,8 +187,8 @@ export const getNewsByTag = asyncHandler(async (req, res, next) => {
 
   const news = await News.find({ tags: tagName, isPublished: true })
     .sort({ date: -1 })
-    .limit(parsedLimit)
-    .skip(parsedSkip)
+    .limit(page.limit)
+    .skip(page.skip)
     .exec();
 
   const publicNews = news.map((article) => article.getPublicNews());
@@ -807,12 +196,7 @@ export const getNewsByTag = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     success: true,
     message: `Found ${news.length} articles with tag: ${tagName}`,
-    pagination: {
-      total: totalCount,
-      limit: parsedLimit,
-      skip: parsedSkip,
-      hasMore: totalCount > parsedSkip + parsedLimit,
-    },
+    pagination: paginationOf(totalCount, page),
     data: publicNews,
   });
 });
@@ -830,7 +214,6 @@ export const getNewsByTag = asyncHandler(async (req, res, next) => {
  */
 export const getNewsBySource = asyncHandler(async (req, res, next) => {
   const { sourceName } = req.params;
-  const { limit = 10, skip = 0 } = req.query;
 
   // Validate source
   if (!VALID_SOURCES.includes(sourceName)) {
@@ -840,8 +223,7 @@ export const getNewsBySource = asyncHandler(async (req, res, next) => {
     );
   }
 
-  const parsedLimit = Math.min(parseInt(limit) || 10, 50);
-  const parsedSkip = Math.max(parseInt(skip) || 0, 0);
+  const page = parsePagination(req.query, 50);
 
   const totalCount = await News.countDocuments({
     source: sourceName,
@@ -850,8 +232,8 @@ export const getNewsBySource = asyncHandler(async (req, res, next) => {
 
   const news = await News.find({ source: sourceName, isPublished: true })
     .sort({ date: -1 })
-    .limit(parsedLimit)
-    .skip(parsedSkip)
+    .limit(page.limit)
+    .skip(page.skip)
     .exec();
 
   const publicNews = news.map((article) => article.getPublicNews());
@@ -859,12 +241,7 @@ export const getNewsBySource = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     success: true,
     message: `Found ${news.length} articles from ${sourceName}`,
-    pagination: {
-      total: totalCount,
-      limit: parsedLimit,
-      skip: parsedSkip,
-      hasMore: totalCount > parsedSkip + parsedLimit,
-    },
+    pagination: paginationOf(totalCount, page),
     data: publicNews,
   });
 });
@@ -880,14 +257,13 @@ export const getNewsBySource = asyncHandler(async (req, res, next) => {
  * @returns {Object} - { success, count, data: [news articles] }
  */
 export const searchNews = asyncHandler(async (req, res, next) => {
-  const { q, limit = 10, skip = 0 } = req.query;
+  const { q } = req.query;
 
   if (!q || q.trim().length < 3) {
     throw new AppError("Search query must be at least 3 characters", 400);
   }
 
-  const parsedLimit = Math.min(parseInt(limit) || 10, 50);
-  const parsedSkip = Math.max(parseInt(skip) || 0, 0);
+  const page = parsePagination(req.query, 50);
 
   const filter = { $text: { $search: q }, isPublished: true };
 
@@ -897,8 +273,8 @@ export const searchNews = asyncHandler(async (req, res, next) => {
       { score: { $meta: "textScore" } },
     )
       .sort({ score: { $meta: "textScore" }, date: -1 })
-      .skip(parsedSkip)
-      .limit(parsedLimit)
+      .skip(page.skip)
+      .limit(page.limit)
       .exec(),
     News.countDocuments(filter),
   ]);
@@ -908,12 +284,7 @@ export const searchNews = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     success: true,
     message: `Found ${news.length} articles matching: "${q}"`,
-    pagination: {
-      total: totalCount,
-      limit: parsedLimit,
-      skip: parsedSkip,
-      hasMore: totalCount > parsedSkip + parsedLimit,
-    },
+    pagination: paginationOf(totalCount, page),
     data: publicNews,
   });
 });
@@ -927,20 +298,14 @@ export const searchNews = asyncHandler(async (req, res, next) => {
  * @returns {Object} - { success, data: stats }
  */
 export const getNewsStats = asyncHandler(async (req, res, next) => {
-  const todayFilter = {
-    isPublished: true,
-    $or: [
-      { publishedDayKey: istDayKey() },
-      { publishedDayKey: { $exists: false }, publishedAt: istDayRange() },
-    ],
-  };
+  const today = todayFilter();
   const totalNews = await News.countDocuments({ isPublished: true });
-  const todayNews = await News.countDocuments(todayFilter);
+  const todayNews = await News.countDocuments(today);
 
   // Today's detailed summaries: how many readers have opened, and which
   // free-tier models wrote them.
   const detailedRows = await News.aggregate([
-    { $match: todayFilter },
+    { $match: today },
     {
       $group: {
         _id: { status: "$detailedStatus", model: "$modelUsed" },

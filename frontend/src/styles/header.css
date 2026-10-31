@@ -1,0 +1,268 @@
+/* ========================= 10. HEADER ========================= */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.site-header__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.brand__mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+}
+
+.brand__mark img {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.brand__name {
+  font-family: var(--font-headline);
+  font-size: var(--text-2xl);
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.brand__date {
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.header__left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* Header weather widget (Open-Meteo) */
+.weather-widget {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  margin-left: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.weather-widget__temp {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.weather-widget__condition {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-muted);
+}
+
+.weather-widget__city {
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.weather-widget--loading,
+.weather-widget--error {
+  opacity: 0.7;
+}
+
+/* Animate pulse for the thermometer while loading */
+@keyframes weather-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.animate-pulse {
+  animation: weather-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Segmented view-mode control */
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: var(--space-1);
+  background: var(--gray-100);
+  border-radius: var(--radius);
+}
+
+.segmented__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.segmented__option:hover {
+  color: var(--text);
+}
+
+.segmented__option--active {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.user-chip {
+  text-align: right;
+}
+
+.user-chip__name {
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.user-chip__email {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* Search */
+.search {
+  position: relative;
+}
+
+.search__icon {
+  position: absolute;
+  left: var(--space-4);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--gray-400);
+  pointer-events: none;
+}
+
+.search .input {
+  padding-left: var(--space-12);
+}
+
+/* Back link (article page header) */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.back-link:hover {
+  color: var(--accent);
+}
+
+.back-link__label {
+  white-space: nowrap;
+}
+
+.article-original-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.article-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.article-original-link:hover {
+  text-decoration: underline;
+}
+
+/* Full-width link button */
+
+/* Loading caption under a centered spinner */
+.loading-caption {
+  margin-top: var(--space-4);
+}
+
+/* Option row (radio/checkbox label) */
+
+/* Article header block */
+.article-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--article-pad);
+  font-size: 1.13rem;
+}
+
+/* Article tabs card — roomier reading box */
+
+/* AI summary icon accent */
+.ai-summary__icon {
+  color: var(--purple-600);
+}
+
+/* Source section heading */
+.source-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.source-heading__rule {
+  width: 4px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(180deg, var(--blue-600), var(--blue-400));
+}
+
+.source-heading__name {
+  font-size: var(--text-xl);
+  font-weight: 700;
+}
+
+.source-heading__count {
+  padding: var(--space-1) var(--space-3);
+  background: var(--gray-100);
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-muted);
+}

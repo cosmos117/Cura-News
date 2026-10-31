@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Sparkles,
@@ -15,6 +15,7 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { NEWS_SOURCES } from "../constants/news";
 import { SOURCE_PROFILES } from "../constants/sources";
+import { statsAPI } from "../services/api";
 
 const FEATURES = [
   {
@@ -77,10 +78,39 @@ const STATS = [
   { value: "24 h", label: "Saved stories kept" },
 ];
 
+/**
+ * The fixed facts, led by the live reader count from GET /api/stats once it
+ * loads. Without a count (still loading, failed, or zero) the facts show alone.
+ */
+const statsWithReaders = (readers) =>
+  readers > 0
+    ? [{ value: readers.toLocaleString("en-IN"), label: "Readers signed up" }, ...STATS.slice(0, 3)]
+    : STATS;
+
+function useReaderCount() {
+  const [readers, setReaders] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    statsAPI
+      .get()
+      .then((res) => {
+        if (!cancelled) setReaders(Number(res.data?.data?.readers) || 0);
+      })
+      .catch(() => {
+        // The landing page works without the count.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return readers;
+}
+
 export default function Landing() {
   const { isAuthenticated } = useAuth();
   const primaryTo = isAuthenticated ? "/dashboard" : "/signup";
   const primaryLabel = isAuthenticated ? "Open your dashboard" : "Start reading free";
+  const stats = statsWithReaders(useReaderCount());
 
   return (
     <div className="page landing">
@@ -179,7 +209,7 @@ export default function Landing() {
         </div>
         <div className="container">
           <dl className="landing-stats">
-            {STATS.map((s) => (
+            {stats.map((s) => (
               <div key={s.label} className="landing-stats__item">
                 <dt className="landing-stats__value">{s.value}</dt>
                 <dd className="landing-stats__label">{s.label}</dd>

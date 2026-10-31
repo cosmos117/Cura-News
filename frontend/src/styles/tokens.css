@@ -1,0 +1,115 @@
+/* ========================= 1. DESIGN TOKENS ========================= */
+
+:root {
+  /* Typefaces — vintage newsprint pairing (loaded in index.html) */
+  --font-masthead: "Anton", "Arial Narrow", Impact, sans-serif;
+  --font-headline: "Playfair Display", Georgia, "Times New Roman", serif;
+  --font-body: "EB Garamond", Georgia, "Times New Roman", serif;
+
+  /* Paper — very slight yellow, like aged newsprint */
+  --paper: #faf5e6;
+  --paper-deep: #f1e8cf;
+  --paper-card: #fffdf4;
+  --ink: #2d2620;
+
+  /* Brand — newsprint ink + paper scale (keeps old var names working) */
+  --blue-50: #faf5e6;
+  --blue-100: #f3ead0;
+  --blue-200: #e3d5b8;
+  --blue-500: #3d4a63;
+  --blue-600: #1e3a5f;
+  --blue-700: #2d2620;
+
+  /* Neutrals */
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-300: #d1d5db;
+  --gray-400: #9ca3af;
+  --gray-500: #6b7280;
+  --gray-600: #4b5563;
+  --gray-700: #374151;
+  --gray-800: #1f2937;
+  --gray-900: #111827;
+
+  /* Status */
+  --green-50: #f0fdf4;
+  --green-100: #dcfce7;
+  --green-200: #bbf7d0;
+  --green-600: #16a34a;
+  --green-700: #15803d;
+  --amber-50: #fffbeb;
+  --amber-100: #fef3c7;
+  --amber-200: #fde68a;
+  --amber-500: #f59e0b;
+  --amber-600: #d97706;
+  --amber-700: #b45309;
+  --amber-800: #92400e;
+  --red-50: #fef2f2;
+  --red-100: #fee2e2;
+  --red-200: #fecaca;
+  --red-500: #ef4444;
+  --red-600: #dc2626;
+  --red-700: #b91c1c;
+  --purple-100: #f3e8ff;
+  --purple-600: #9333ea;
+  --purple-700: #7e22ce;
+  --indigo-100: #e0e7ff;
+  --orange-100: #ffedd5;
+  --orange-800: #9a3412;
+  --pink-100: #fce7f3;
+  --pink-800: #9d174d;
+
+  /* Semantic */
+  --bg: var(--paper);
+  --surface: var(--paper-card);
+  --text: var(--ink);
+  --text-muted: #6f6355;
+  --border: #e3d5b8;
+  --accent: #1e3a5f;
+  --accent-hover: #152a45;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-full: 999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+
+  /* Type scale */
+  --text-xs: 0.8rem;
+  --text-sm: 0.95rem;
+  --text-base: 1.05rem;
+  --text-lg: 1.2rem;
+  --text-xl: 1.35rem;
+  --text-2xl: 1.65rem;
+  --text-3xl: 2rem;
+  --text-4xl: 2.5rem;
+  --text-5xl: 3.2rem;
+
+  /* Layout */
+  --container: 1280px;
+  --container-narrow: 1240px;
+  --article-pad: clamp(28px, 4vw, 48px);
+  --article-gap: clamp(28px, 3.5vw, 44px);
+  --header-height: 72px;
+}

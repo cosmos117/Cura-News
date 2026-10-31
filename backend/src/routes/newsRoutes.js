@@ -1,16 +1,15 @@
 import express from "express";
 import { protect } from "../middleware/authMiddleware.js";
 import { detailedLimiter } from "../middleware/rateLimiter.js";
+import { getTodayNews, getForYouNews } from "../controllers/feedController.js";
+import { generateDetailedNews } from "../controllers/detailedController.js";
 import {
-  getTodayNews,
-  getForYouNews,
   getNewsByID,
   createNews,
   getNewsByTag,
   getNewsBySource,
   searchNews,
   getNewsStats,
-  generateDetailedNews,
 } from "../controllers/newsController.js";
 
 const router = express.Router();

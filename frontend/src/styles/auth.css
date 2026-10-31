@@ -1,0 +1,82 @@
+/* ========================= 12. AUTH PAGES ========================= */
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-12) var(--space-4);
+  background: linear-gradient(135deg, var(--blue-50), var(--indigo-100));
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 448px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xl);
+  padding: var(--space-8);
+}
+
+/* Back to the landing page, top-left of the login and sign-up cards. */
+.auth-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transition: color 0.15s ease, gap 0.15s ease;
+}
+
+.auth-back:hover {
+  color: var(--accent);
+  gap: var(--space-2);
+  text-decoration: none;
+}
+
+.auth-card__header {
+  text-align: center;
+  margin-bottom: var(--space-8);
+}
+
+.auth-card__logo {
+  display: block;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto var(--space-4);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+}
+
+.auth-card__title {
+  font-size: var(--text-3xl);
+  font-weight: 700;
+}
+
+.auth-card__subtitle {
+  color: var(--text-muted);
+  margin-top: var(--space-2);
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-block: var(--space-6);
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--gray-300);
+}
+
+.divider__text {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+}

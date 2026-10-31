@@ -4,7 +4,12 @@
 
 <p align="center">
   <b>Today's news from three trusted papers, summarized so you can catch up in minutes.</b><br />
-  <a href="https://cura-news.vercel.app/">Live site</a>
+  <a href="https://cura-news.vercel.app/">Live site</a><br /><br />
+  <a href="https://github.com/cosmos117/Cura-News/actions/workflows/ci.yml"><img src="https://github.com/cosmos117/Cura-News/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+</p>
+
+<p align="center">
+  <img src="docs/demo.gif" alt="CURA News demo: the landing page, the dashboard filtered by topic, card view, and an article's detailed AI explainer" width="860" />
 </p>
 
 ---
@@ -128,11 +133,14 @@ story the feed can collect in a day.
 
 React and Vite on the front, Node.js and Express on the back, MongoDB for
 storage. Hosted on Vercel (site), Render (server) and MongoDB Atlas (database).
-88 automated checks run the whole server against an in-memory database.
+90 server tests run the real API against an in-memory database (Node's built-in
+test runner), and 39 website tests cover the dashboard, landing page and components
+(Vitest and Testing Library). GitHub Actions runs both, plus a production
+build, on every push and pull request.
 
 ## Run it locally
 
-You need Node.js 18+, MongoDB (local or a free Atlas cluster), and a free API key
+You need Node.js 22+, MongoDB (local or a free Atlas cluster), and a free API key
 from Groq and/or Google AI Studio.
 
 ```bash
@@ -151,8 +159,8 @@ cp .env.example .env
 npm run dev
 ```
 
-Run the checks with `cd backend && npm test`; no MongoDB install is needed for
-them.
+Run the tests with `npm test` in `backend` or `frontend`. The server tests
+start their own in-memory MongoDB, so no database install is needed.
 
 <details>
 <summary><b>Configuration</b></summary>

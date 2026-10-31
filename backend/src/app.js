@@ -10,6 +10,7 @@ import newsRoutes from "./routes/newsRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import bookmarkRoutes from "./routes/bookmarkRoutes.js";
 import meRoutes from "./routes/meRoutes.js";
+import statsRoutes from "./routes/statsRoutes.js";
 
 const app = express();
 app.set("trust proxy", config.TRUST_PROXY);
@@ -52,6 +53,7 @@ app.use("/api/admin", adminRoutes);
 
 app.use("/api/bookmarks", bookmarkRoutes);
 app.use("/api/me", meRoutes);
+app.use("/api/stats", statsRoutes);
 
 // API version and info
 app.get("/api/info", (req, res) => {
