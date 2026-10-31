@@ -4,8 +4,7 @@
 
 <p align="center">
   <b>Today's news from three trusted papers, summarized so you can catch up in minutes.</b><br />
-  <a href="https://cura-news.vercel.app/">Live site</a><br /><br />
-  <a href="https://github.com/cosmos117/Cura-News/actions/workflows/ci.yml"><img src="https://github.com/cosmos117/Cura-News/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://cura-news.vercel.app/">Live site</a>
 </p>
 
 <p align="center">
