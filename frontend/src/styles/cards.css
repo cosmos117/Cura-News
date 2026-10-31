@@ -167,3 +167,8 @@
   font-weight: 500;
   color: var(--gray-700);
 }
+
+.article-card__note {
+  font-weight: 400;
+  color: var(--text-muted);
+}

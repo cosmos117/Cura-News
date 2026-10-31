@@ -22,9 +22,13 @@ export function ArticleGrid({ items, className = "" }) {
 
 /**
  * Article card. Renders the actual News schema fields: headline, summary,
- * bulletPoints, category, source, date.
+ * bulletPoints, category, source, date. The whole card opens the article.
+ *
+ * @param {string} [note] - Extra line after the source, e.g. a bookmark's expiry
+ * @param {React.ReactNode} [actions] - Extra footer controls; clicks on them
+ *   do not open the card
  */
-export default function ArticleCard({ article, onClick }) {
+export default function ArticleCard({ article, onClick, note, actions }) {
   const { headline, summary, bulletPoints, topic, topicLabel, category, source, date, url } =
     article;
   const displayTopicLabel =
@@ -37,6 +41,8 @@ export default function ArticleCard({ article, onClick }) {
   }[source] || "";
 
   const handleKeyDown = (e) => {
+    // Keys pressed on a link or button inside the card belong to that control.
+    if (e.target !== e.currentTarget) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onClick();
@@ -83,21 +89,27 @@ export default function ArticleCard({ article, onClick }) {
         )}
 
         <div className="article-card__footer">
-          <span className="article-card__source">{source || "Unknown source"}</span>
-          {url ? (
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="article-card__link"
-            >
-              Read original
-              <ExternalLink className="icon icon--sm" />
-            </a>
-          ) : (
-            <ChevronRight className="icon icon--lg article-card__chevron" />
-          )}
+          <span className="article-card__source">
+            {source || "Unknown source"}
+            {note && <span className="article-card__note"> · {note}</span>}
+          </span>
+          <span className="row row-2">
+            {actions && <span onClick={(e) => e.stopPropagation()}>{actions}</span>}
+            {url ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="article-card__link"
+              >
+                Read original
+                <ExternalLink className="icon icon--sm" />
+              </a>
+            ) : (
+              <ChevronRight className="icon icon--lg article-card__chevron" />
+            )}
+          </span>
         </div>
 
       </div>

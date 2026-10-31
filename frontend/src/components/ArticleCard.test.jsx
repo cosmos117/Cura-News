@@ -47,6 +47,7 @@ describe("ArticleCard", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
 
     await userEvent.click(link);
+    fireEvent.keyDown(link, { key: "Enter" });
     expect(onClick).not.toHaveBeenCalled();
   });
 

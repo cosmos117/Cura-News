@@ -45,6 +45,11 @@ describe("formatExpiry", () => {
     expect(formatExpiry(ago(-(5 * 60 + 30) * MINUTE))).toBe("Expires in 5h");
   });
 
+  it("counts whole days once a day or more is left", () => {
+    expect(formatExpiry(ago(-30 * 24 * 60 * MINUTE))).toBe("Expires in 30 days");
+    expect(formatExpiry(ago(-(36 * 60) * MINUTE))).toBe("Expires in 1 day");
+  });
+
   it("reports a past time as expired and ignores bad input", () => {
     expect(formatExpiry(ago(MINUTE))).toBe("Expired");
     expect(formatExpiry(null)).toBe("");

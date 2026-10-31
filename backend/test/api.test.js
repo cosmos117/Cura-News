@@ -1369,13 +1369,13 @@ const saved = await News.create({
   isPublished: true,
 });
 
-await test("saving a bookmark sets a 24h expiry and stores a snapshot", async () => {
+await test("saving a bookmark sets a 30-day expiry and stores a snapshot", async () => {
   const res = await api(`/bookmarks/${saved._id}`, { method: "POST", token });
   assert.equal(res.status, 200);
   const bookmark = await Bookmark.findOne({ article: saved._id }).lean();
   assert.equal(bookmark.snapshot.headline, saved.headline);
-  const hoursLeft = (bookmark.expiresAt - Date.now()) / 3600000;
-  assert.ok(hoursLeft > 23.9 && hoursLeft <= 24, `expiry was ${hoursLeft}h away`);
+  const daysLeft = (bookmark.expiresAt - Date.now()) / 86400000;
+  assert.ok(daysLeft > 29.99 && daysLeft <= 30, `expiry was ${daysLeft} days away`);
 });
 
 await test("re-saving a bookmark does not extend its expiry", async () => {

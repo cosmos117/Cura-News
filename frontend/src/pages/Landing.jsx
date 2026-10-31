@@ -41,7 +41,7 @@ const FEATURES = [
   {
     icon: Bookmark,
     title: "Save stories for later",
-    text: "Bookmark anything that catches your eye and come back to it any time in the next 24 hours, even after the day's feed resets.",
+    text: "Bookmark anything that catches your eye and come back to it any time in the next 30 days, even after the day's feed resets.",
   },
   {
     icon: Headphones,
@@ -75,7 +75,7 @@ const STATS = [
   { value: "3", label: "Trusted publishers" },
   { value: "15", label: "News topics" },
   { value: "15 min", label: "Between updates" },
-  { value: "24 h", label: "Saved stories kept" },
+  { value: "30 days", label: "Saved stories kept" },
 ];
 
 /**

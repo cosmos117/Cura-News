@@ -74,7 +74,7 @@ export default function Article() {
       setLoading(false);
     } catch (err) {
       // Articles are deleted nightly; a saved one stays readable from its
-      // bookmark copy for 24 hours after it was saved.
+      // bookmark copy for 30 days after it was saved.
       if (err.response?.status === 404) {
         try {
           const savedResponse = await bookmarkAPI.getOne(id);

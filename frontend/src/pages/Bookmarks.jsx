@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bookmark, ExternalLink, Loader, Trash2 } from "lucide-react";
+import { Bookmark, Loader, Trash2 } from "lucide-react";
 import { bookmarkAPI } from "../services/api";
 import { formatExpiry, getErrorMessage } from "../utils/format";
-import DetailedBadge from "../components/DetailedBadge";
+import ArticleCard from "../components/ArticleCard";
 
 const PAGE_SIZE = 20;
 
@@ -77,7 +77,7 @@ export default function Bookmarks() {
             </h2>
             <p className="text-muted">
               {pagination.total || 0} {pagination.total === 1 ? "article" : "articles"} saved
-              {" "}· saved articles are kept for 24 hours
+              {" "}· saved articles are kept for 30 days
             </p>
           </div>
         </div>
@@ -103,32 +103,24 @@ export default function Bookmarks() {
         ) : (
           <div className="grid-cards">
             {articles.map((article) => (
-              <article className="article-card card--hover" key={article._id}>
-                <div className="article-card__body">
-                  <div className="article-card__meta">
-                    <span>{article.source || "News"}</span>
-                    <span>{article.topicLabel || article.category || "Misc"}</span>
-                    <span>{formatExpiry(article.expiresAt)}</span>
-                    <DetailedBadge status={article.detailedStatus} />
-                  </div>
-                  <h3 className="article-card__title">{article.headline}</h3>
-                  <p className="article-card__summary">{article.gist || article.summary}</p>
-                  <div className="article-card__footer">
-                    <button className="article-card__link" onClick={() => navigate(`/article/${article._id}`)}>
-                      Read article <ExternalLink className="icon icon--sm" />
-                    </button>
-                    <button
-                      className="icon-btn"
-                      onClick={() => remove(article._id)}
-                      disabled={removingId === article._id}
-                      aria-label={`Remove ${article.headline} from saved articles`}
-                      title="Remove from saved articles"
-                    >
-                      <Trash2 className="icon icon--md" />
-                    </button>
-                  </div>
-                </div>
-              </article>
+              <ArticleCard
+                key={article._id}
+                article={article}
+                onClick={() => navigate(`/article/${article._id}`)}
+                note={formatExpiry(article.expiresAt)}
+                actions={
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => remove(article._id)}
+                    disabled={removingId === article._id}
+                    aria-label={`Remove ${article.headline} from saved articles`}
+                    title="Remove from saved articles"
+                  >
+                    <Trash2 className="icon icon--md" />
+                  </button>
+                }
+              />
             ))}
           </div>
         )}

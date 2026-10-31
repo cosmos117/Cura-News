@@ -65,7 +65,8 @@ export const formatToday = () =>
   });
 
 /**
- * Time left before a bookmark expires, e.g. "Expires in 5h" or "Expires in 12m".
+ * Time left before a bookmark expires, e.g. "Expires in 29 days",
+ * "Expires in 5h" or "Expires in 12m".
  */
 export const formatExpiry = (value) => {
   if (!value) return "";
@@ -74,7 +75,10 @@ export const formatExpiry = (value) => {
   if (msLeft <= 0) return "Expired";
   const minutes = Math.ceil(msLeft / 60000);
   if (minutes < 60) return `Expires in ${minutes}m`;
-  return `Expires in ${Math.floor(minutes / 60)}h`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Expires in ${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `Expires in ${days} ${days === 1 ? "day" : "days"}`;
 };
 
 /**

@@ -1,8 +1,8 @@
 import mongoose from "mongoose";
 import { TOPIC_LABELS } from "../config/topics.js";
 
-/** A bookmark lives for 24 hours from the moment it was saved. */
-export const BOOKMARK_TTL_MS = 24 * 60 * 60 * 1000;
+/** A bookmark lives for 30 days from the moment it was saved. */
+export const BOOKMARK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const bookmarkSchema = new mongoose.Schema(
   {
