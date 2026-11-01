@@ -37,8 +37,7 @@ minutes, and starts clean again at midnight.
 - **Save up to 50 stories for 30 days.** Saved stories survive the midnight reset.
 - **Sign in with email or Google,** change your picks any time in Settings, and
   delete your account permanently.
-- Small touches: local weather in the header, a header that slides away while you
-  scroll down, and a "Detailed" badge on stories that already have an explainer.
+
 
 ## How it works
 
