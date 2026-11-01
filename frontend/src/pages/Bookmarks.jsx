@@ -5,7 +5,8 @@ import { bookmarkAPI } from "../services/api";
 import { formatExpiry, getErrorMessage } from "../utils/format";
 import ArticleCard from "../components/ArticleCard";
 
-const PAGE_SIZE = 20;
+// Matches the per-reader cap, so every saved article fits on one page.
+const MAX_SAVED = 50;
 
 export default function Bookmarks() {
   const navigate = useNavigate();
@@ -19,7 +20,7 @@ export default function Bookmarks() {
     setLoading(true);
     setError(null);
     try {
-      const response = await bookmarkAPI.getAll({ limit: PAGE_SIZE });
+      const response = await bookmarkAPI.getAll({ limit: MAX_SAVED });
       setArticles(response.data.data || []);
       setPagination(response.data.pagination || { total: 0, hasMore: false });
     } catch (err) {
@@ -76,7 +77,7 @@ export default function Bookmarks() {
               <Bookmark className="icon icon--md" /> Saved Articles
             </h2>
             <p className="text-muted">
-              {pagination.total || 0} {pagination.total === 1 ? "article" : "articles"} saved
+              {pagination.total || 0} of {pagination.max || MAX_SAVED} saved
               {" "}· saved articles are kept for 30 days
             </p>
           </div>

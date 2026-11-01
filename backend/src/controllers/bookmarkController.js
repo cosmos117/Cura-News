@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { withTopicLabels } from "../config/topics.js";
-import Bookmark, { BOOKMARK_TTL_MS } from "../models/Bookmark.js";
+import Bookmark, { BOOKMARK_TTL_MS, MAX_BOOKMARKS_PER_USER } from "../models/Bookmark.js";
 import News from "../models/News.js";
 import { AppError, asyncHandler } from "../middleware/errorHandler.js";
 
@@ -43,6 +43,22 @@ export const saveBookmark = asyncHandler(async (req, res) => {
   const { articleId } = req.params;
   validateArticleId(articleId);
   const article = await findPublishedArticle(articleId);
+
+  // Re-saving an article already saved is always fine; a new one needs room.
+  const alreadySaved = await Bookmark.exists(
+    Bookmark.activeFilter({ user: req.user.userId, article: articleId }),
+  );
+  if (!alreadySaved) {
+    const savedCount = await Bookmark.countDocuments(
+      Bookmark.activeFilter({ user: req.user.userId }),
+    );
+    if (savedCount >= MAX_BOOKMARKS_PER_USER) {
+      throw new AppError(
+        `You can keep up to ${MAX_BOOKMARKS_PER_USER} saved articles. Remove some to save more.`,
+        409,
+      );
+    }
+  }
 
   // $min keeps the original expiry if the bookmark already exists, and also
   // fills it in for bookmarks created before expiry was introduced.
@@ -152,6 +168,7 @@ export const getBookmarks = asyncHandler(async (req, res) => {
       limit: parsedLimit,
       skip: parsedSkip,
       hasMore: total > parsedSkip + parsedLimit,
+      max: MAX_BOOKMARKS_PER_USER,
     },
     data,
   });

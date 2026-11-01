@@ -1549,6 +1549,45 @@ await test("GET /api/stats is cached between visits", async () => {
   assert.equal((await api("/stats")).data.data.readers, before + 1);
 });
 
+// ---------- saved-article cap ----------
+await test("a reader can keep at most 50 saved articles", async () => {
+  const { MAX_BOOKMARKS_PER_USER } = await import("../src/models/Bookmark.js");
+  assert.equal(MAX_BOOKMARKS_PER_USER, 50);
+  const reader = await registerReader("hoarder");
+  const stories = await News.insertMany(
+    Array.from({ length: MAX_BOOKMARKS_PER_USER + 1 }, (_, i) => ({
+      source: "The Hindu",
+      headline: `Cap test story number ${i}`,
+      summary: "A long enough summary so the article passes the minimum length check for summaries.",
+      bulletPoints: ["One point"],
+      tags: ["Polity"],
+      topic: "misc",
+      isPublished: true,
+      date: new Date(),
+    })),
+  );
+  const save = (story) => api(`/bookmarks/${story._id}`, { method: "POST", token: reader.token });
+
+  for (const story of stories.slice(0, MAX_BOOKMARKS_PER_USER)) {
+    assert.equal((await save(story)).status, 200);
+  }
+  const over = await save(stories[MAX_BOOKMARKS_PER_USER]);
+  assert.equal(over.status, 409);
+  assert.match(over.data.message, /up to 50 saved articles/);
+
+  assert.equal((await save(stories[0])).status, 200, "re-saving one already saved still works");
+
+  const list = await api(`/bookmarks?limit=50`, { token: reader.token });
+  assert.equal(list.data.pagination.total, 50);
+  assert.equal(list.data.pagination.max, 50);
+  assert.equal(list.data.data.length, 50, "the whole list fits one page");
+
+  await api(`/bookmarks/${stories[1]._id}`, { method: "DELETE", token: reader.token });
+  assert.equal((await save(stories[MAX_BOOKMARKS_PER_USER])).status, 200, "removing one frees a place");
+
+  await News.deleteMany({ _id: { $in: stories.map((story) => story._id) } });
+});
+
 // ---------- one topic per article ----------
 await test("topic and category always agree when an article is created", async () => {
   const base = {

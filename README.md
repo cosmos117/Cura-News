@@ -34,7 +34,7 @@ minutes, and starts clean again at midnight.
 - **Read your way:** a compact line view grouped by paper, or a card view.
 - **Go deeper on demand** with the detailed explainer, and have it **read aloud**,
   with each paragraph highlighted as it is spoken.
-- **Save stories for 30 days.** Saved stories survive the midnight reset.
+- **Save up to 50 stories for 30 days.** Saved stories survive the midnight reset.
 - **Sign in with email or Google,** change your picks any time in Settings, and
   delete your account permanently.
 - Small touches: local weather in the header, a header that slides away while you
@@ -132,7 +132,7 @@ story the feed can collect in a day.
 
 React and Vite on the front, Node.js and Express on the back, MongoDB for
 storage. Hosted on Vercel (site), Render (server) and MongoDB Atlas (database).
-93 server tests run the real API against an in-memory database (Node's built-in
+94 server tests run the real API against an in-memory database (Node's built-in
 test runner), and 44 website tests cover the dashboard, saved articles, landing page and components
 (Vitest and Testing Library). GitHub Actions runs both, plus a production
 build, on every push and pull request.

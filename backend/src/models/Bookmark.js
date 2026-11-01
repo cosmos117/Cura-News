@@ -4,6 +4,12 @@ import { withTopicLabels } from "../config/topics.js";
 /** A bookmark lives for 30 days from the moment it was saved. */
 export const BOOKMARK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * Most saved articles a reader can hold at once. Each save stores a copy of
+ * the story (~3 KB), so without a cap one account could fill the database.
+ */
+export const MAX_BOOKMARKS_PER_USER = 50;
+
 const bookmarkSchema = new mongoose.Schema(
   {
     user: {

@@ -55,6 +55,8 @@ describe("Saved articles", () => {
     expect(screen.getByText(saved.summary)).toBeInTheDocument();
     expect(screen.getByText(/Expires in 29 days/)).toBeInTheDocument();
     expect(screen.getByText(/kept for 30 days/)).toBeInTheDocument();
+    expect(screen.getByText(/1 of 50 saved/)).toBeInTheDocument();
+    expect(bookmarkAPI.getAll).toHaveBeenCalledWith({ limit: 50 });
   });
 
   it("opens the story when the card is clicked, like the dashboard", async () => {
