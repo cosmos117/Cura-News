@@ -43,7 +43,7 @@ export default function TopicCards({
           }`}
         >
           <span className="topic-card__icon">
-            <Newspaper className="icon icon--xl" />
+            <Newspaper className="icon icon--sm" />
           </span>
           <span className="topic-card__label">All</span>
           <span className="topic-card__count">{allCount}</span>
@@ -70,7 +70,7 @@ export default function TopicCards({
               ).replace("cat-", "")}${active ? " topic-card--active" : ""}`}
             >
               <span className="topic-card__icon">
-                <Icon className="icon icon--xl" />
+                <Icon className="icon icon--sm" />
               </span>
               <span className="topic-card__label">{category}</span>
               <span className="topic-card__count">{count}</span>

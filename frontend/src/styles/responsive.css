@@ -43,9 +43,34 @@
     display: none;
   }
 
-  /* Topic cards: two per row reads better than one very wide card. */
+  /* Topic tiles: a two-row strip that scrolls sideways, so the whole
+     section stays about 100px tall instead of filling the screen. */
   .topic-grid {
-    grid-template-columns: repeat(2, 1fr);
+    display: grid;
+    grid-template-columns: none;
+    grid-template-rows: repeat(2, auto);
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    /* Snap to the padded edge, or the first tile loads scrolled out of line. */
+    scroll-padding-inline: var(--space-4);
+    scrollbar-width: none;
+    margin-inline: calc(-1 * var(--space-4));
+    padding: 2px var(--space-4) var(--space-1);
+  }
+
+  .topic-grid::-webkit-scrollbar {
+    display: none;
+  }
+
+  .topic-card {
+    scroll-snap-align: start;
+  }
+
+  .topic-card__label {
+    max-width: 11rem;
   }
 
   /* Source cards stack: the logo plus name needs the full width. */
