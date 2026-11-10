@@ -45,7 +45,7 @@ export const validateList = (values, allowed, label) => {
 
 /** Throw a 400 unless `id` looks like a Mongo ObjectId. */
 export const assertArticleId = (id) => {
-  if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+  if (typeof id !== "string" || !/^[0-9a-fA-F]{24}$/.test(id)) {
     throw new AppError("Invalid news ID format", 400);
   }
 };
@@ -57,9 +57,34 @@ export const assertArticleId = (id) => {
  * @returns {{ limit: number, skip: number }}
  */
 export const parsePagination = ({ limit, skip } = {}, maxLimit) => ({
-  limit: Math.min(parseInt(limit) || 10, maxLimit),
-  skip: Math.max(parseInt(skip) || 0, 0),
+  // Never below 1: Mongo reads a negative limit as "that many, in one batch".
+  limit: Math.min(Math.max(parseInt(limit, 10) || 10, 1), maxLimit),
+  skip: Math.max(parseInt(skip, 10) || 0, 0),
 });
+
+/** Longest search text accepted; longer input is a mistake or abuse. */
+export const MAX_SEARCH_LENGTH = 200;
+
+/**
+ * The search text from a query value, trimmed. A repeated parameter
+ * (?q=a&q=b) arrives as an array, which is rejected instead of crashing.
+ * @param {*} value - raw query value
+ * @returns {string} - "" when no search was given
+ */
+export const readSearchTerm = (value) => {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value !== "string") {
+    throw new AppError("Search query must be a single text value", 400);
+  }
+  const term = value.trim();
+  if (term && term.length < 3) {
+    throw new AppError("Search query must be at least 3 characters", 400);
+  }
+  if (term.length > MAX_SEARCH_LENGTH) {
+    throw new AppError(`Search query cannot exceed ${MAX_SEARCH_LENGTH} characters`, 400);
+  }
+  return term;
+};
 
 /** The `pagination` block every list response carries. */
 export const paginationOf = (total, { limit, skip }) => ({
@@ -109,11 +134,8 @@ export const buildArticleFilter = ({
 } = {}) => {
   const filter = todayFilter();
 
-  const term = search?.trim();
+  const term = readSearchTerm(search);
   if (term) {
-    if (term.length < 3) {
-      throw new AppError("Search query must be at least 3 characters", 400);
-    }
     filter.$text = { $search: term };
   }
 

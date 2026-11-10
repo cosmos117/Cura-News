@@ -7,6 +7,7 @@ import {
   assertArticleId,
   paginationOf,
   parsePagination,
+  readSearchTerm,
   todayFilter,
 } from "../utils/newsQuery.js";
 
@@ -257,9 +258,9 @@ export const getNewsBySource = asyncHandler(async (req, res, next) => {
  * @returns {Object} - { success, count, data: [news articles] }
  */
 export const searchNews = asyncHandler(async (req, res, next) => {
-  const { q } = req.query;
+  const q = readSearchTerm(req.query.q);
 
-  if (!q || q.trim().length < 3) {
+  if (!q) {
     throw new AppError("Search query must be at least 3 characters", 400);
   }
 

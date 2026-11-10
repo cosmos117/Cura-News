@@ -14,21 +14,24 @@ const JWT_AUDIENCE = "cura-news-client";
 /**
  * Generate JWT token
  * @param {string} userId - User ID to include in token
+ * @param {number} [tokenVersion] - the account's current tokenVersion; the
+ *   token stops working once the account's value moves past it
  * @returns {string} - JWT token
  */
-export const generateToken = (userId) => {
+export const generateToken = (userId, tokenVersion = 0) => {
   if (!userId) {
     throw new Error("User ID is required to generate token");
   }
 
   try {
     const token = jwt.sign(
-      { userId }, // Payload
+      { userId, tv: tokenVersion || 0 }, // Payload
       config.JWT_SECRET, // Secret
       {
         expiresIn: config.JWT_EXPIRE, // Expiration time
         issuer: JWT_ISSUER,
         audience: JWT_AUDIENCE,
+        algorithm: "HS256",
       },
     );
     return token;

@@ -93,8 +93,11 @@ export const config = {
   IST_OFFSET_MINUTES: parseInt(getEnv("IST_OFFSET_MINUTES", "330"), 10),
 };
 
-// Validate critical env vars in production
-if (config.isProduction) {
+// Validate critical env vars everywhere except local development and tests.
+// Checking only NODE_ENV=production meant a deployment with any other value
+// (staging, a typo) started happily with the public default JWT secret, and
+// anyone can sign valid tokens with that.
+if (!config.isDevelopment && !config.isTest) {
   // Provider keys are intentionally not checked here. The live provider
   // chain performs its own configuration check, so warning about absent
   // unused keys would imply a requirement that does not exist. The AI key check lives in
@@ -111,13 +114,13 @@ if (config.isProduction) {
 
   if (isPlaceholderSecret) {
     throw new Error(
-      "❌ JWT_SECRET must be set to a secure, unique value in production " +
+      "❌ JWT_SECRET must be set to a secure, unique value outside local development " +
         "(the value in .env.example is public knowledge and must never be reused)",
     );
   }
 
   if (jwtSecret.length < 32) {
-    throw new Error("❌ JWT_SECRET must be at least 32 characters in production");
+    throw new Error("❌ JWT_SECRET must be at least 32 characters outside local development");
   }
 }
 

@@ -3,6 +3,7 @@ import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import robotsParser from "robots-parser";
 import { config } from "../config/env.js";
+import { assertPublicRedirect, isPublicHttpUrl, publicOnlyAgents } from "../utils/safeFetch.js";
 
 const USER_AGENT = "CURA-News/1.0 (+https://github.com/cosmos117/Cura-News)";
 
@@ -45,6 +46,10 @@ const loadRobots = async (articleUrl) => {
     const response = await axios.get(robotsUrl, {
       timeout: config.FETCH_TIMEOUT_MS,
       headers: { "User-Agent": USER_AGENT },
+      maxContentLength: 512 * 1024,
+      maxRedirects: 3,
+      beforeRedirect: assertPublicRedirect,
+      ...publicOnlyAgents,
       validateStatus: (status) => status === 200 || status === 403 || status === 404,
     });
     if (response?.status === 200) robots = robotsParser(robotsUrl, response.data);
@@ -121,7 +126,9 @@ export async function extractArticleText(
   { minChars = config.MIN_TEXT_CHARS, paragraphs = false } = {},
 ) {
   try {
-    if (!articleUrl || !/^https?:\/\//i.test(articleUrl)) {
+    // Public web pages only: never localhost, a private network or the
+    // host's metadata service (see utils/safeFetch.js).
+    if (!articleUrl || !isPublicHttpUrl(articleUrl)) {
       return unavailable("Article URL is missing or invalid");
     }
 
@@ -137,6 +144,9 @@ export async function extractArticleText(
         Accept: "text/html,application/xhtml+xml",
       },
       maxContentLength: 2 * 1024 * 1024,
+      maxRedirects: 3,
+      beforeRedirect: assertPublicRedirect,
+      ...publicOnlyAgents,
       responseType: "text",
     });
 
@@ -172,6 +182,7 @@ export async function extractArticleText(
       paragraphs: paragraphList,
     };
   } catch (error) {
-    return unavailable(`Could not extract article text: ${error.message}`, { failed: true });
+    console.warn(`Article fetch failed for ${articleUrl}: ${error.message}`);
+    return unavailable("Could not read the article page", { failed: true });
   }
 }

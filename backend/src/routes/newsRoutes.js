@@ -1,5 +1,6 @@
 import express from "express";
 import { protect } from "../middleware/authMiddleware.js";
+import { requireCronSecret } from "../middleware/adminAuth.js";
 import { detailedLimiter } from "../middleware/rateLimiter.js";
 import { getTodayNews, getForYouNews } from "../controllers/feedController.js";
 import { generateDetailedNews } from "../controllers/detailedController.js";
@@ -106,8 +107,9 @@ router.post(
  * POST /api/news
  * Create a new news article.
  *
- * Protected: previously unauthenticated, which allowed anyone to inject
- * arbitrary articles straight into the published feed.
+ * Operator only (x-cron-secret header). A reader's token is not enough:
+ * anyone can register, so that would let any visitor publish an article to
+ * every reader's feed, with a link of their choosing.
  *
  * Request Body:
  * {
@@ -119,7 +121,7 @@ router.post(
  *   "subtopics": ["Fiscal Policy"]
  * }
  */
-router.post("/", protect, createNews);
+router.post("/", requireCronSecret, createNews);
 
 /**
  * GET /api/news/:id

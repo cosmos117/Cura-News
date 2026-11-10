@@ -33,6 +33,18 @@ export const asyncHandler = (fn) => {
  */
 export const errorHandler = (err, req, res, next) => {
   const statusCode = err.statusCode || 500;
+
+  // Malformed or oversized request bodies (raised by express.json). These are
+  // the caller's mistake, not a server fault: answer plainly, log nothing.
+  if (err.type === "entity.parse.failed" || err.type === "entity.too.large") {
+    const tooLarge = err.type === "entity.too.large";
+    return res.status(tooLarge ? 413 : 400).json({
+      success: false,
+      statusCode: tooLarge ? 413 : 400,
+      message: tooLarge ? "Request body is too large" : "Request body is not valid JSON",
+    });
+  }
+
   const isKnownError =
     err instanceof AppError ||
     err.name === "ValidationError" ||
@@ -68,7 +80,7 @@ export const errorHandler = (err, req, res, next) => {
 
   // Mongoose duplicate key error
   if (err.code === 11000) {
-    const field = Object.keys(err.keyPattern)[0];
+    const field = Object.keys(err.keyPattern || {})[0] || "Value";
     return res.status(409).json({
       success: false,
       statusCode: 409,

@@ -106,15 +106,14 @@ router.get("/me", protect, getCurrentUser);
  * POST /api/auth/logout
  * Logout user (Protected route)
  *
- * There is no server-side token store, so this cannot invalidate an issued
- * JWT; the client discards its copy. A leaked token stays valid until it
- * expires. Adding a tokenVersion claim on the User document would allow real
- * server-side revocation.
+ * Revokes every token issued to the account (see User.tokenVersion), so a
+ * copied or leaked token dies with the session instead of living on until it
+ * expires.
  *
  * Response:
  * {
  *   "success": true,
- *   "message": "Logout successful. Please remove token from client."
+ *   "message": "Logout successful"
  * }
  */
 router.post("/logout", protect, logout);

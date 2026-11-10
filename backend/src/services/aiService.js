@@ -11,28 +11,6 @@ const env = config;
 /** Message for every "no AI capacity right now" outcome; callers match on it. */
 export const RATE_LIMITED_MESSAGE = "AI providers are temporarily rate-limited";
 
-// ---------------------------------------------------------------------------
-// Model pool
-//
-// Free tiers limit each MODEL separately, so every model on a key is its own
-// slot with its own quota. A call goes to the first slot, in preference order,
-// that has room right now:
-//
-//  - Each slot has its own cooldown. A 429 honours the provider's retry hint
-//    (Gemini answers a used-up daily quota with "retry in 13h"), so a spent
-//    model is skipped instead of retried.
-//  - Calls are paced per slot: requests per minute, plus Groq's tokens-per-
-//    minute and requests-per-day budgets read from its response headers.
-//  - Models that no longer exist ("not found", "decommissioned") are disabled
-//    for a few hours and logged, so a stale model list cannot break anything.
-//  - Readers come first: background work leaves capacity free and pauses
-//    while a reader is waiting.
-//
-// State is in memory: a restart clears it and the next calls re-learn limits.
-// ---------------------------------------------------------------------------
-
-// Free-tier models measured on this project's keys (October 2026), best first.
-// Override with GROQ_MODELS / GEMINI_MODELS (comma-separated) when they change.
 const DEFAULT_MODELS = {
   groq: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
   gemini: [

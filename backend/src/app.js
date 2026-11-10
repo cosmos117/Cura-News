@@ -15,12 +15,25 @@ import statsRoutes from "./routes/statsRoutes.js";
 
 const app = express();
 app.set("trust proxy", config.TRUST_PROXY);
+// Plain key=value query strings only. The default parser turns ?q[$ne]=1 into
+// an object, which is how query operators get smuggled into Mongo filters.
+app.set("query parser", "simple");
 
 // ====== MIDDLEWARE ======
 
 // CORS - Handle cross-origin requests
 app.use(corsMiddleware());
-app.use(helmet());
+// A JSON API never renders HTML, so nothing may be loaded from or framed by
+// its responses.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
+    },
+    referrerPolicy: { policy: "no-referrer" },
+  }),
+);
 // Feed responses are repetitive JSON and shrink several times over.
 app.use(compression());
 
@@ -47,6 +60,12 @@ app.get("/health", (req, res) => {
 
 // ====== ROUTES ======
 
+// Responses about one account must never be stored by a browser or a proxy.
+app.use(["/api/auth", "/api/me", "/api/bookmarks", "/api/news/for-you"], (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 // Auth routes
 app.use("/api/auth", authRoutes);
 
@@ -64,7 +83,6 @@ app.get("/api/info", (req, res) => {
     name: "CURA News API",
     version: "1.0.0",
     description: "AI Current Affairs News Summarizer Backend",
-    environment: config.NODE_ENV,
   });
 });
 

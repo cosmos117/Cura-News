@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import axios from "axios";
+import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
 import User from "../models/User.js";
 import { config } from "../config/env.js";
@@ -8,6 +10,21 @@ import { MAX_PASSWORD_LENGTH, isValidEmail } from "../utils/validation.js";
 
 /** A non-empty string. Objects would reach Mongo queries as operators. */
 const isText = (value) => typeof value === "string" && value.length > 0;
+
+/** The app token for a user, tied to the account's current tokenVersion. */
+const issueToken = (user) => generateToken(user._id.toString(), user.tokenVersion);
+
+/**
+ * A hash no password matches. Sign-in compares against it when the account
+ * does not exist or has no password, so that case takes as long as a wrong
+ * password and response time does not reveal which emails are registered.
+ */
+let decoyHash;
+const rejectWithDelay = async (password) => {
+  decoyHash ||= bcrypt.hash(crypto.randomBytes(24).toString("hex"), 12);
+  await bcrypt.compare(password, await decoyHash);
+  throw new AppError("Invalid email or password", 401);
+};
 
 /**
  * Register a new user
@@ -67,7 +84,7 @@ export const register = asyncHandler(async (req, res, next) => {
   await user.save();
 
   // Generate JWT token
-  const token = generateToken(user._id.toString());
+  const token = issueToken(user);
 
   // Create auth response
   const authResponse = createAuthResponse(user, token);
@@ -103,19 +120,11 @@ export const login = asyncHandler(async (req, res, next) => {
     "+password",
   );
 
-  if (!user) {
-    throw new AppError("Invalid email or password", 401);
-  }
-
-  // Check if account is active
-  if (!user.isActive) {
-    throw new AppError("Account has been deactivated", 403);
-  }
-
-  // Google-only accounts have no password. Same message as a wrong password,
-  // so the response does not reveal how an account was created.
-  if (!user.password) {
-    throw new AppError("Invalid email or password", 401);
+  // Unknown email, or a Google-only account with no password: the same
+  // message and the same delay as a wrong password, so the response does not
+  // reveal whether or how an account exists.
+  if (!user || !user.password) {
+    await rejectWithDelay(password);
   }
 
   // Compare passwords
@@ -125,8 +134,14 @@ export const login = asyncHandler(async (req, res, next) => {
     throw new AppError("Invalid email or password", 401);
   }
 
+  // Only after the password is proven: otherwise anyone could learn that an
+  // account exists and is deactivated just by typing its email.
+  if (!user.isActive) {
+    throw new AppError("Account has been deactivated", 403);
+  }
+
   // Generate JWT token
-  const token = generateToken(user._id.toString());
+  const token = issueToken(user);
 
   // Create auth response
   const authResponse = createAuthResponse(user, token);
@@ -201,6 +216,9 @@ export const googleLogin = asyncHandler(async (req, res, next) => {
 
   if (!user) {
     user = await User.findOne({ email });
+    if (user && !user.isActive) {
+      throw new AppError("Account has been deactivated", 403);
+    }
     if (user) {
       user.googleId = payload.sub;
       if (!user.avatar && payload.picture) user.avatar = payload.picture;
@@ -220,8 +238,7 @@ export const googleLogin = asyncHandler(async (req, res, next) => {
     throw new AppError("Account has been deactivated", 403);
   }
 
-
-  const token = generateToken(user._id.toString());
+  const token = issueToken(user);
 
   res.status(created ? 201 : 200).json({
     ...createAuthResponse(user, token),
@@ -264,16 +281,22 @@ export const getCurrentUser = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * Logout user (Frontend will remove token from localStorage)
+ * Logout user
  * POST /api/auth/logout
+ *
+ * Raises the account's tokenVersion, so the token used here, and any other
+ * token issued to this account, stops working immediately instead of staying
+ * valid until it expires. Signs the reader out on every device.
  *
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  * @returns {Object} - { success, message }
  */
 export const logout = asyncHandler(async (req, res, next) => {
+  await User.updateOne({ _id: req.user.userId }, { $inc: { tokenVersion: 1 } });
+
   res.status(200).json({
     success: true,
-    message: "Logout successful. Please remove token from client.",
+    message: "Logout successful",
   });
 });

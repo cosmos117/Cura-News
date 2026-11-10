@@ -1084,24 +1084,25 @@ await test("GET /notes/article/:id is gone (notes feature removed)", async () =>
 });
 
 // ---------- ai routes ----------
-await test("POST /news requires auth (was public)", async () => {
-  const res = await api("/news", {
-    method: "POST",
-    body: {
-      source: "The Hindu",
-      headline: "Injected article headline for test",
-      summary: "A summary that comfortably exceeds the fifty character minimum.",
-      bulletPoints: ["one", "two", "three"],
-      tags: ["Polity"],
-    },
-  });
-  assert.equal(res.status, 401);
+await test("POST /news is operator-only: no caller, and no reader, can publish", async () => {
+  const body = {
+    source: "The Hindu",
+    headline: "Injected article headline for test",
+    summary: "A summary that comfortably exceeds the fifty character minimum.",
+    bulletPoints: ["one", "two", "three"],
+    tags: ["Polity"],
+    url: "http://169.254.169.254/latest/meta-data/",
+  };
+  assert.equal((await api("/news", { method: "POST", body })).status, 401);
+  // A signed-in reader is still not an operator: anyone can register.
+  assert.equal((await api("/news", { method: "POST", token, body })).status, 401);
+  assert.equal(await News.countDocuments({ headline: body.headline }), 0);
 });
 
 await test("POST /news rejects an invalid source enum", async () => {
   const res = await api("/news", {
     method: "POST",
-    token,
+    headers: { "x-cron-secret": "test-cron-secret" },
     body: {
       source: "BBC News",
       headline: "Some headline that is long enough here",
@@ -1288,13 +1289,14 @@ await test("POST /news accepts a valid category and rejects an invalid one", asy
     category: "Economy & Business",
   };
 
-  const ok = await api("/news", { method: "POST", token, body: payload });
+  const asOperator = { "x-cron-secret": "test-cron-secret" };
+  const ok = await api("/news", { method: "POST", headers: asOperator, body: payload });
   assert.equal(ok.status, 201);
   assert.equal(ok.data.data.category, "Economy & Business");
 
   const bad = await api("/news", {
     method: "POST",
-    token,
+    headers: asOperator,
     body: { ...payload, category: "Nonsense" },
   });
   assert.equal(bad.status, 400);
@@ -1502,7 +1504,7 @@ await test("deleting an account removes it and its saved articles for good", asy
   assert.equal(res.status, 200);
   assert.equal(await User.countDocuments({ email: reader.email }), 0);
   assert.equal(await Bookmark.countDocuments({ user: me.data.user.id }), 0);
-  assert.equal((await api("/auth/me", { token: reader.token })).status, 404, "old token is useless");
+  assert.equal((await api("/auth/me", { token: reader.token })).status, 401, "old token is useless");
 
   const login = await asReader("/auth/login", {
     method: "POST",
@@ -1720,6 +1722,152 @@ await test("sign-in fields must be text, never query objects", async () => {
     body: { email: "someone@example.com", password: "x".repeat(200) },
   });
   assert.equal(tooLong.status, 400);
+});
+
+await test("signing out revokes the token on the server", async () => {
+  const reader = await registerReader("leaving");
+  assert.equal((await api("/auth/me", { token: reader.token })).status, 200);
+  assert.equal((await api("/auth/logout", { method: "POST", token: reader.token })).status, 200);
+  assert.equal(
+    (await api("/auth/me", { token: reader.token })).status,
+    401,
+    "a copied token must stop working once the reader signs out",
+  );
+
+  const again = await asReader("/auth/login", {
+    method: "POST",
+    body: { email: reader.email, password: "supersecret1" },
+  });
+  assert.equal(again.status, 200);
+  assert.equal((await api("/auth/me", { token: again.data.token })).status, 200);
+});
+
+await test("tokens issued before tokenVersion existed keep working", async () => {
+  const jwt = (await import("jsonwebtoken")).default;
+  const reader = await registerReader("legacy");
+  const me = await api("/auth/me", { token: reader.token });
+  const legacy = jwt.sign({ userId: me.data.user.id }, process.env.JWT_SECRET, {
+    expiresIn: "1h",
+    issuer: "cura-news-api",
+    audience: "cura-news-client",
+  });
+  assert.equal((await api("/auth/me", { token: legacy })).status, 200);
+  assert.equal(me.data.user.tokenVersion, undefined, "tokenVersion is not sent to clients");
+});
+
+await test("a deactivated account is only revealed to someone who knows the password", async () => {
+  const reader = await registerReader("dormant");
+  await User.updateOne({ email: reader.email }, { $set: { isActive: false } });
+
+  const guess = await asReader("/auth/login", {
+    method: "POST",
+    body: { email: reader.email, password: "not-the-password" },
+  });
+  assert.equal(guess.status, 401);
+  assert.match(guess.data.message, /invalid email or password/i);
+
+  const owner = await asReader("/auth/login", {
+    method: "POST",
+    body: { email: reader.email, password: "supersecret1" },
+  });
+  assert.equal(owner.status, 403);
+});
+
+await test("article fetching refuses private and non-web addresses", async () => {
+  const { isPublicHttpUrl, isPrivateAddress, assertPublicRedirect } = await import(
+    "../src/utils/safeFetch.js"
+  );
+  for (const url of [
+    "http://localhost/admin",
+    "http://127.0.0.1:27017/",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://10.0.0.5/",
+    "http://192.168.1.1/",
+    "http://172.16.0.1/",
+    "http://[::1]/",
+    "http://[::ffff:127.0.0.1]/",
+    "http://0.0.0.0/",
+    "http://2130706433/",
+    "http://user:pass@example.com/",
+    "file:///etc/passwd",
+    "ftp://example.com/",
+    "not a url",
+  ]) {
+    assert.equal(isPublicHttpUrl(url), false, url);
+  }
+  assert.equal(isPublicHttpUrl("https://www.thehindu.com/news/article.ece"), true);
+  assert.equal(isPublicHttpUrl("http://93.184.216.34/"), true);
+  assert.equal(isPrivateAddress("fd00::1"), true);
+  assert.equal(isPrivateAddress("8.8.8.8"), false);
+  assert.throws(() => assertPublicRedirect({ protocol: "http:", hostname: "169.254.169.254" }));
+  assert.doesNotThrow(() => assertPublicRedirect({ protocol: "https:", hostname: "indianexpress.com" }));
+
+  // End to end, against this test server on 127.0.0.1: nothing is fetched.
+  const blocked = await extractArticleText(`${baseUrl}/info`);
+  assert.equal(blocked.available, false);
+  assert.match(blocked.reason, /missing or invalid/);
+});
+
+await test("a name that resolves to a private address is not fetched", async () => {
+  const { publicOnlyAgents } = await import("../src/utils/safeFetch.js");
+  // "localhost" resolves to loopback; the pre-check is bypassed on purpose
+  // here so the DNS-level guard is what stops the request.
+  await assert.rejects(
+    axios.get(`http://localhost:${server.address().port}/api/info`, {
+      ...publicOnlyAgents,
+      timeout: 5000,
+    }),
+    /non-public address/,
+  );
+});
+
+await test("odd query strings are answered with 400s, never a crash", async () => {
+  assert.equal((await api("/news/search?q=budget&q=policy")).status, 400);
+  assert.equal((await api("/news?search=budget&search=policy")).status, 400);
+  assert.equal((await api("/news/search?q[$ne]=x")).status, 400);
+  assert.equal((await api(`/news/search?q=${"a".repeat(500)}`)).status, 400);
+
+  const negative = await api("/news?limit=-5");
+  assert.equal(negative.status, 200);
+  assert.equal(negative.data.pagination.limit, 1);
+});
+
+await test("article payloads carry no internal error text", async () => {
+  const flagged = await News.create({
+    source: "The Hindu",
+    headline: "Article whose last fetch attempt failed internally",
+    summary: "A story used to check that internal bookkeeping never reaches readers in any payload.",
+    tags: ["Polity"],
+    url: "https://example.com/internal-error",
+    date: new Date(),
+    publishedDayKey: istDayKey(),
+    lastError: "connect ECONNREFUSED 10.0.0.12:443",
+  });
+  const res = await api(`/news/${flagged._id}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.data.data.lastError, undefined);
+});
+
+await test("a disallowed origin is refused with 403, and malformed JSON with 400", async () => {
+  const foreign = await api("/news", { headers: { Origin: "https://evil.example" } });
+  assert.equal(foreign.status, 403);
+  const allowed = await api("/news", { headers: { Origin: "http://localhost:3000" } });
+  assert.equal(allowed.status, 200);
+
+  const res = await fetch(`${baseUrl}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Forwarded-For": "203.0.113.10" },
+    body: "{not json",
+  });
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).message, /not valid JSON/);
+});
+
+await test("account responses are never cached, and the API sets a locked-down CSP", async () => {
+  const res = await fetch(`${baseUrl}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(res.headers.get("cache-control"), "no-store");
+  assert.match(res.headers.get("content-security-policy"), /default-src 'none'/);
+  assert.equal(res.headers.get("x-powered-by"), null);
 });
 
 await test("oversized request bodies are refused", async () => {

@@ -37,14 +37,28 @@ const resolveUser = async (token) => {
   }
 
   // Runs on every signed-in request: read only what is needed.
-  const user = await User.findById(decoded.userId).select("name email isActive").lean();
+  if (typeof decoded.userId !== "string") {
+    throw new AppError("Invalid token payload", 401);
+  }
 
+  const user = await User.findById(decoded.userId)
+    .select("name email isActive tokenVersion")
+    .lean();
+
+  // 401, not 404: the client treats 401 as "signed out" and clears the token
+  // of an account that no longer exists.
   if (!user) {
-    throw new AppError("User not found", 404);
+    throw new AppError("Session is no longer valid. Please login again.", 401);
   }
 
   if (!user.isActive) {
     throw new AppError("Account has been deactivated", 403);
+  }
+
+  // Signing out raises the account's tokenVersion, which retires every token
+  // issued before it. Tokens from before this claim existed count as 0.
+  if ((decoded.tv || 0) !== (user.tokenVersion || 0)) {
+    throw new AppError("Session has ended. Please login again.", 401);
   }
 
   return user;

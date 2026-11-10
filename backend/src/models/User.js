@@ -53,6 +53,12 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Copied into every token this account is issued. Raising it (sign-out)
+    // makes all earlier tokens invalid at once.
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
     // The "For You" feed: papers and topics (ids from config/topics.js) the
     // reader picked. onboardedAt marks the picker as finished or skipped.
     preferences: {
@@ -118,6 +124,7 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 userSchema.methods.toJSON = function () {
   const user = this.toObject();
   delete user.password;
+  delete user.tokenVersion;
   return user;
 };
 

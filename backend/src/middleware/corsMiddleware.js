@@ -1,5 +1,6 @@
 import cors from "cors";
 import { config } from "../config/env.js";
+import { AppError } from "./errorHandler.js";
 
 /**
  * Parse CORS_ORIGIN into a list of allowed origins.
@@ -26,7 +27,9 @@ const corsOptions = {
     if (!origin || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-    return callback(new Error(`Origin ${origin} is not allowed by CORS`));
+    // A refusal, not a server fault: 403 without the stack-trace noise a
+    // plain Error (500) would log for every stray cross-site request.
+    return callback(new AppError("Origin is not allowed", 403));
   },
   credentials: true,
   optionsSuccessStatus: 200,

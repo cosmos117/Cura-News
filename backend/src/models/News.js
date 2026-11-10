@@ -316,7 +316,9 @@ newsSchema.index({ headline: "text", summary: "text" });
  * @returns {Object} - News object
  */
 newsSchema.methods.getPublicNews = function () {
-  return withTopicLabels(this.toObject());
+  // lastError is internal bookkeeping (it can hold upstream error text).
+  const { lastError, ...article } = this.toObject();
+  return withTopicLabels(article);
 };
 
 // ---------------------------------------------------------------------------

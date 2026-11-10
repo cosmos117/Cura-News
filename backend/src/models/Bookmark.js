@@ -48,7 +48,8 @@ bookmarkSchema.index({ user: 1, createdAt: -1 });
 
 /** Build the stored copy of a News document (lean or hydrated). */
 bookmarkSchema.statics.snapshotFrom = function (article) {
-  const data = typeof article.toObject === "function" ? article.toObject() : article;
+  const { lastError, ...data } =
+    typeof article.toObject === "function" ? article.toObject() : article;
   return withTopicLabels(data);
 };
 
